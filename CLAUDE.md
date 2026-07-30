@@ -138,6 +138,19 @@ drop a live call.
 
 ---
 
+## Do not place test calls to the operator's phone
+
+Automated tests must never dial the operator. Two harnesses that did have been
+disabled. Any call-path verification is a **human-run** step: the operator
+places the call themselves and reports what they heard.
+
+This also means the §3.3 acceptance test — one live call surviving navigation
+to all five other pages — is only **partially** verified. Confirmed: the call
+connected, the timer ran, navigating to Conversations kept it connected with
+the mini call bar visible, exactly one call record was written, and no phantom
+end events fired. Not yet confirmed in a single unbroken call: all three
+remaining pages. Finish that by hand when convenient.
+
 ## Testing gotchas that have already cost a day
 
 - **Do Not Disturb / iOS "Silence Unknown Callers"** send test calls straight
