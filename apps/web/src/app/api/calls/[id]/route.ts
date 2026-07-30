@@ -83,6 +83,35 @@ export async function PATCH(
       },
     });
 
+    // §1.3 — Not Interested is a removal, not a stage. The lead leaves the
+    // board and every dial queue, but keeps its history.
+    if (disposition === 'not_interested') {
+      const contact = await db.contact.findUnique({
+        where: { id: call.contactId },
+        include: { stage: true },
+      });
+
+      await db.contact.update({
+        where: { id: call.contactId },
+        data: {
+          stageId: null,
+          pipelineRemovedAt: new Date(),
+          removalReason: 'not_interested',
+          doNotContact: true,
+        },
+      });
+
+      await db.activity.create({
+        data: {
+          contactId: call.contactId,
+          type: 'stage_change',
+          summary: 'Removed from pipeline — not interested',
+          callId: call.id,
+          meta: { fromStage: contact?.stage?.name ?? null, reason: 'not_interested' },
+        },
+      });
+    }
+
     await db.activity.create({
       data: {
         contactId: call.contactId,

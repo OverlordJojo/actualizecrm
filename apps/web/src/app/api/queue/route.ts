@@ -20,6 +20,9 @@ export async function GET(request: Request) {
   const leads = await db.contact.findMany({
     where: {
       doNotContact: false,
+      // Removed leads are excluded from dial queues permanently unless
+      // manually restored (§1.3).
+      pipelineRemovedAt: null,
       ...(listId ? { listId } : {}),
       ...(stageId ? { stageId } : {}),
     },

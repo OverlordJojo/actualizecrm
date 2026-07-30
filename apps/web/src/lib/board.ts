@@ -38,15 +38,20 @@ export async function loadBoard(pipelineId?: string): Promise<BoardData | null> 
     orderBy: { position: 'asc' },
     include: {
       contacts: {
-        where: { doNotContact: false },
+        // Removed leads leave the board entirely (§1.3). They remain
+        // searchable on Conversations under the Removed filter.
+        where: { pipelineRemovedAt: null },
         orderBy: [{ stagePosition: 'asc' }, { updatedAt: 'desc' }],
         select: LEAD_SELECT,
       },
     },
   });
 
+  // v2 removed the Unassigned column — every lead now lands in New on import
+  // (§1.2). Anything still stage-less and not removed is a data anomaly rather
+  // than a normal state, so surface it instead of hiding it.
   const unassigned = await db.contact.findMany({
-    where: { stageId: null, doNotContact: false },
+    where: { stageId: null, pipelineRemovedAt: null },
     orderBy: { createdAt: 'desc' },
     select: LEAD_SELECT,
   });
