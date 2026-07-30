@@ -1,14 +1,17 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { PageHeader } from '@/components/PageHeader';
 import { ImportModal } from '@/components/import/ImportModal';
 import { PipelineBoard } from '@/components/pipeline/PipelineBoard';
-import { ActiveLeadCard, type ActiveLead, type VisibleCustomField } from '@/components/dialer/ActiveLeadCard';
+import {
+  ActiveLeadCard,
+  type ActiveLead,
+  type VisibleCustomField,
+} from '@/components/dialer/ActiveLeadCard';
 import { DialControls } from '@/components/dialer/DialControls';
-import { useDialSession } from '@/components/dialer/useDialSession';
+import { useCall, formatCallTimer } from '@/components/call/CallProvider';
 import type { BoardData } from '@/components/pipeline/types';
-import type { RingAudioConfig } from '@/integrations/audio/useRingAudio';
 
 export interface DialerLead extends ActiveLead {
   listId: string | null;
@@ -20,21 +23,25 @@ export interface LeadListOption {
   count: number;
 }
 
+/**
+ * The Dialer page renders the call; it does not own it.
+ *
+ * All call state lives in <CallProvider> in the root layout (§3.3), so
+ * navigating away and back leaves the call untouched.
+ */
 export function DialerClient({
   leadCount: initialLeadCount,
   board: initialBoard,
   lists,
   visibleCustomFields,
-  gapSeconds,
-  audio,
 }: {
   leadCount: number;
   board: BoardData | null;
   lists: LeadListOption[];
   visibleCustomFields: VisibleCustomField[];
-  gapSeconds: number;
-  audio: RingAudioConfig;
 }) {
+  const call = useCall();
+
   const [importOpen, setImportOpen] = useState(false);
   const [leadCount, setLeadCount] = useState(initialLeadCount);
   const [board, setBoard] = useState(initialBoard);
@@ -42,7 +49,6 @@ export function DialerClient({
 
   const [listOptions, setListOptions] = useState(lists);
   const [selectedListId, setSelectedListId] = useState('');
-  const [queue, setQueue] = useState<DialerLead[]>([]);
   const [loadingQueue, setLoadingQueue] = useState(false);
 
   const refreshBoard = useCallback(async () => {
@@ -54,23 +60,23 @@ export function DialerClient({
     setBoardKey((k) => k + 1);
   }, [board]);
 
-  const session = useDialSession({
-    queue,
-    gapSeconds,
-    audio,
-    onCallEnded: refreshBoard,
-  });
+  // Reflect dispositions and stage moves made during a call — including ones
+  // set while the operator was on another page.
+  useEffect(() => {
+    if (call.lineState === 'ready') refreshBoard();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [call.lineState]);
 
   async function loadQueue(listId: string) {
     setSelectedListId(listId);
     if (!listId) {
-      setQueue([]);
+      call.setQueue([]);
       return;
     }
     setLoadingQueue(true);
     try {
       const res = await fetch(`/api/queue?listId=${listId}`);
-      if (res.ok) setQueue(await res.json());
+      if (res.ok) call.setQueue(await res.json());
     } finally {
       setLoadingQueue(false);
     }
@@ -84,33 +90,35 @@ export function DialerClient({
     }).catch(() => {});
   }, []);
 
-  const remaining = Math.max(queue.length - session.index, 0);
-  const banner = session.error ?? session.phoneError;
+  const remaining = Math.max(call.queue.length - call.index, 0);
+  const banner = call.error ?? call.phoneError;
 
-  // Music was asked for but cannot play. Calls will ring silently, which is
-  // the intended fallback but is indistinguishable from a broken dialer unless
-  // we say so.
   const audioWarning =
-    audio.mode === 'music' && session.silentFallback
+    call.audio.mode === 'music' && call.silentFallback
       ? `Music mode is on but Spotify is not playing${
-          session.spotifyProblem ? ` — ${session.spotifyProblem}` : ''
+          call.spotifyProblem ? ` — ${call.spotifyProblem}` : ''
         }. Calls will ring silently.`
       : null;
 
   const subtitle = useMemo(() => {
     const parts = [`${leadCount.toLocaleString()} leads`];
-    if (queue.length) parts.push(`${remaining} in queue`);
+    if (call.queue.length) parts.push(`${remaining} in queue`);
     return parts.join(' · ');
-  }, [leadCount, queue.length, remaining]);
+  }, [leadCount, call.queue.length, remaining]);
 
   return (
     <>
       <PageHeader title="Dialer" subtitle={subtitle}>
+        {call.lineState === 'connected' && (
+          <span className="mr-2 font-mono text-sm tabular-nums text-green-400">
+            {formatCallTimer(call.callSeconds)}
+          </span>
+        )}
         <select
           className="input w-auto py-1.5 text-xs"
           value={selectedListId}
           onChange={(e) => loadQueue(e.target.value)}
-          disabled={session.sessionActive}
+          disabled={call.sessionActive}
         >
           <option value="">Load a list…</option>
           {listOptions.map((l) => (
@@ -127,42 +135,43 @@ export function DialerClient({
       {banner && (
         <div className="mx-4 mt-2 flex items-center gap-2 rounded-lg border border-red-900 bg-red-950/60 px-3 py-1.5 text-xs text-red-200">
           <span className="flex-1">{banner}</span>
-          <button className="underline" onClick={session.clearError}>
+          <button className="underline" onClick={call.clearError}>
             dismiss
           </button>
         </div>
       )}
 
-      {/* Regions A and B */}
       {audioWarning && (
         <div className="mx-4 mt-2 rounded-lg border border-amber-900 bg-amber-950/40 px-3 py-1.5 text-xs text-amber-100">
           {audioWarning}
         </div>
       )}
 
-      {/* overflow-hidden matters: Region B must never bleed over the board */}
+      {/* Regions A and B. overflow-hidden matters: Region B must never bleed
+          over the board. */}
       <div className="flex h-[320px] shrink-0 gap-5 overflow-hidden px-5 py-4">
         <ActiveLeadCard
-          lead={session.activeLead}
+          lead={call.activeLead}
           visibleCustomFields={visibleCustomFields}
           onNotesChange={saveNotes}
         />
         <DialControls
-          lineState={session.lineState}
-          muted={session.muted}
-          callerId={session.callerId}
-          sessionActive={session.sessionActive}
+          lineState={call.lineState}
+          muted={call.muted}
+          callerId={call.callerId}
+          sessionActive={call.sessionActive}
           queueLength={loadingQueue ? 0 : remaining}
-          stats={session.stats}
-          gapSeconds={gapSeconds}
-          countdown={session.countdown}
-          onStartSession={session.startSession}
-          onPauseSession={session.pauseSession}
-          onEndSession={session.endSession}
-          onManualDial={session.dialManual}
-          onHangup={session.hangup}
-          onToggleMute={session.toggleMute}
-          onDisposition={session.setDisposition}
+          stats={call.stats}
+          gapSeconds={call.gapSeconds}
+          countdown={call.countdown}
+          callSeconds={call.callSeconds}
+          onStartSession={call.startSession}
+          onPauseSession={call.pauseSession}
+          onEndSession={call.endSession}
+          onManualDial={call.dialManual}
+          onHangup={call.hangup}
+          onToggleMute={call.toggleMute}
+          onDisposition={call.setDisposition}
           onVoicemailDrop={() => {
             /* build step 6 */
           }}
@@ -174,7 +183,7 @@ export function DialerClient({
         <PipelineBoard
           key={boardKey}
           initial={board}
-          onCallLeadId={session.activeLead?.id ?? null}
+          onCallLeadId={call.activeLead?.id ?? null}
         />
       ) : (
         <div className="flex flex-1 items-center justify-center text-sm text-ink-500">
@@ -188,7 +197,11 @@ export function DialerClient({
         onImported={(report) => {
           setLeadCount((c) => c + report.added);
           setListOptions((prev) => [
-            { id: report.listId, name: report.listName, count: report.added + report.merged },
+            {
+              id: report.listId,
+              name: report.listName,
+              count: report.added + report.merged,
+            },
             ...prev,
           ]);
           refreshBoard();

@@ -1,13 +1,17 @@
 import { db } from '@/lib/db';
 import { loadBoard } from '@/lib/board';
-import { getSettings, asNumber, asBool } from '@/lib/settings';
 import { DialerClient } from './DialerClient';
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * Dialer settings (gap delay, audio mode) are no longer read here — they are
+ * owned by <CallProvider> in the root layout, which needs them whether or not
+ * the operator is currently looking at this page (§3.3).
+ */
 export default async function DialerPage() {
-  const [leadCount, board, lists, customFields, settings] = await Promise.all([
-    db.contact.count(),
+  const [leadCount, board, lists, customFields] = await Promise.all([
+    db.contact.count({ where: { pipelineRemovedAt: null } }),
     loadBoard(),
     db.leadList.findMany({
       orderBy: { createdAt: 'desc' },
@@ -18,7 +22,6 @@ export default async function DialerPage() {
       orderBy: { position: 'asc' },
       select: { id: true, label: true },
     }),
-    getSettings(),
   ]);
 
   return (
@@ -31,14 +34,6 @@ export default async function DialerPage() {
         count: l._count.contacts,
       }))}
       visibleCustomFields={customFields}
-      gapSeconds={asNumber(settings['dialer.gapDelaySeconds'], 2)}
-      audio={{
-        mode: asBool(settings['audio.musicInsteadOfRinging'])
-          ? 'music'
-          : 'ringback',
-        ringbackVolume: asNumber(settings['audio.ringbackVolume'], 0.5),
-        playlistUri: settings['audio.spotifyPlaylistUri'] || null,
-      }}
     />
   );
 }

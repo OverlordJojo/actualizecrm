@@ -47,6 +47,7 @@ export function DialControls({
   stats,
   gapSeconds,
   countdown,
+  callSeconds,
   onStartSession,
   onPauseSession,
   onEndSession,
@@ -65,6 +66,8 @@ export function DialControls({
   gapSeconds: number;
   /// Seconds remaining before the dialer auto-advances, or null when idle.
   countdown: number | null;
+  /// Seconds since the prospect answered, or null when not connected.
+  callSeconds: number | null;
   onStartSession: () => void;
   onPauseSession: () => void;
   onEndSession: () => void;
@@ -92,6 +95,12 @@ export function DialControls({
         <span className="text-xs font-medium text-ink-200">
           {LINE_LABEL[lineState]}
         </span>
+        {/* Live timer, started at answer rather than at dial (§3.2). */}
+        {callSeconds !== null && (
+          <span className="font-mono text-sm font-semibold tabular-nums text-green-400">
+            {formatDuration(callSeconds)}
+          </span>
+        )}
         {callerId && (
           <span className="ml-auto font-mono text-[11px] text-ink-400">
             from {formatPhone(callerId)}
