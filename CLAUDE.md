@@ -1,0 +1,153 @@
+# ActualizeCRM
+
+A cold-calling CRM for **one operator**. v2.
+
+> The name "DialDeck" appears in some planning documents. It is not a real
+> thing — the project is and always was ActualizeCRM.
+
+## The v2 shape, and why
+
+v1 was local-first: SQLite in a file, everything on one machine, works on a
+plane. v2 gave that up for exactly one reason — **scheduled automations have to
+fire while the MacBook is closed.** A follow-up SMS queued for 9am is worthless
+if it only sends when the laptop is next opened.
+
+That single requirement forces the rest: a remote worker needs a remote
+database, so SQLite became Postgres, so the repo became two services. This is a
+real tradeoff, not an upgrade. The dialer now needs network connectivity to do
+anything at all.
+
+There is still no user/org/account model anywhere. Single-operator by design.
+**Do not add auth, orgs, roles, or invite flows.** If a change seems to need a
+`userId`, it is solving the wrong problem.
+
+---
+
+## Layout
+
+```
+actualizecrm/
+├── packages/
+│   └── db/          ★  Prisma schema + client, shared by both services
+├── apps/
+│   ├── web/            Next.js dialer — runs locally only
+│   └── worker/      ★  Railway service — automations, sweeps, rollups
+├── services/
+│   └── voice-ai/    ★  Local Python sidecar — Whisper STT + Ollama extraction
+├── scripts/            tunnel, SQLite→Postgres import
+└── data/               local audio, recordings, v1 SQLite backup (gitignored)
+```
+
+★ = has its own `CLAUDE.md` with setup written for a non-developer. Read it
+before touching the folder.
+
+Inside `apps/web/src/integrations/` the v1 modules still apply and still have
+their own `CLAUDE.md`: `telnyx`, `audio`, `email`, `messaging`, `import`.
+
+## Run commands
+
+```bash
+npm run dev          # Next.js on :3000 (the dialer)
+npm run tunnel       # cloudflared + register the Telnyx webhook
+npm run voice-ai     # local Whisper/Ollama sidecar on :8787
+npm run worker:dev   # worker locally (normally it runs on Railway)
+
+npm run db:migrate       # apply schema changes
+npm run db:seed          # default pipeline and stages
+npm run db:import-sqlite # one-time v1 import
+npm run db:studio        # browse data
+
+npm run typecheck    # both services
+```
+
+A full live session needs **`npm run dev` + `npm run tunnel`**, plus
+`npm run voice-ai` if you want transcription.
+
+---
+
+## Env var index
+
+Every key and the folder that owns it. Setup instructions live in the owning
+folder's `CLAUDE.md`.
+
+| Key | Owned by |
+| --- | --- |
+| `DATABASE_URL` | `packages/db` — Postgres. **Public** URL locally, private on Railway |
+| `REDIS_URL` | `apps/worker` — BullMQ backing store |
+| `WORKER_SHARED_SECRET` | `apps/worker` — auth for `POST /jobs/enqueue` |
+| `TELNYX_API_KEY` | `apps/web/src/integrations/telnyx` |
+| `TELNYX_CONNECTION_ID` | `apps/web/src/integrations/telnyx` |
+| `TELNYX_MESSAGING_PROFILE` | `apps/web/src/integrations/messaging` |
+| `SPOTIFY_CLIENT_ID` / `_SECRET` | `apps/web/src/integrations/audio` |
+| `GOOGLE_CLIENT_ID` / `_SECRET` | `apps/web` calendar — OAuth, `calendar.events` |
+| `CALENDAR_ENCRYPTION_KEY` | `apps/web` calendar — AES-256-GCM, 32 bytes hex |
+| `SMTP_HOST` `SMTP_PORT` `SMTP_USER` `SMTP_PASS` | `apps/web/src/integrations/email` |
+| `RESEND_API_KEY` | `apps/web/src/integrations/email` — optional fallback |
+| `WHISPER_MODEL` `OLLAMA_URL` `OLLAMA_MODEL` | `services/voice-ai` |
+| `PUBLIC_WEBHOOK_URL` | written by `scripts/tunnel.ts` — never edit by hand |
+
+`.env.local` holds everything. `.env` holds only `DATABASE_URL`, because the
+Prisma CLI does not read `.env.local`. `packages/db/.env` is a **symlink** to
+the root `.env` — Prisma looks for it beside the schema.
+
+### The Railway URL trap
+
+Railway issues two URLs per database. The internal one
+(`postgres.railway.internal`) resolves **only from inside Railway**. Your
+laptop needs the public one (`*.proxy.rlwy.net`), found under the service's
+**Variables** tab as `DATABASE_PUBLIC_URL` / `REDIS_PUBLIC_URL`.
+
+`P1001: Can't reach database server at postgres.railway.internal:5432` means
+you have the internal URL locally. It is the most common setup mistake here.
+
+---
+
+## Rules
+
+### Never mark a feature complete without a real end-to-end test
+
+Code review alone is not "done". Done means you ran it:
+
+- Telephony → a real call to your own cell, audio confirmed both directions
+- Audio → Spotify actually paused on answer and resumed on hangup
+- Worker → an automation fired **with the laptop shut down**
+- Calendar → the event appeared in Google with the right title and invite
+- Voice AI → a written precision/recall table from 20 scripted calls
+
+Every feature ships with a screenshot of working UI plus a logged real-world
+test.
+
+### All UI copy uses operator language
+
+**dials**, **connects**, **booked**, **no answer**, **callback**.
+Never *SIP*, *leg*, *DTMF*, *early media*, *INVITE*, *trunk*, *SDP*.
+
+### Do not describe multi-line dialing as spam protection
+
+It is the opposite: carrier analytics flag high call volume per number and
+short-duration calls, so more lines increases labelling risk. The real
+mitigation is number rotation with area-code matching plus retiring numbers on
+a schedule. Keep the UI copy honest.
+
+### Calls must survive navigation
+
+The Telnyx client, active-call state, media element, timer, and transcript
+stream live in `<CallProvider>` in the root layout, above the router outlet.
+Anything call-related placed inside a page will be destroyed on navigation and
+drop a live call.
+
+---
+
+## Testing gotchas that have already cost a day
+
+- **Do Not Disturb / iOS "Silence Unknown Callers"** send test calls straight
+  to voicemail with only a missed-call notification. The app-side symptom is a
+  call reporting Connected after ~5 seconds with a "Low inbound audio" warning.
+  Save your Telnyx number to your contacts before testing.
+- **React StrictMode double-invokes effects.** The Telnyx client is a module
+  singleton for this reason; constructing it in an effect opens two SIP
+  registrations and the older one's call dies the moment the far end answers.
+- **The Telnyx SDK emits both `hangup` and `destroy`** for one call. Handling
+  both fires `onEnded` twice and silently skips a lead per call.
+- **`/connections/{id}` is read-only.** Updating a connection needs the
+  type-specific path, e.g. `/credential_connections/{id}`.

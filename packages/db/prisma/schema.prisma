@@ -1,0 +1,744 @@
+// ActualizeCRM — single-operator cold-calling CRM.
+//
+// There is no user/org/account model anywhere in this schema by design: the
+// app is single-operator. If you find yourself wanting a `userId` column, you
+// are solving the wrong problem — a second operator runs their own instance
+// against their own database.
+//
+// v2 moved from SQLite to Postgres. The reason is not scale: it is that the
+// Railway worker must execute scheduled automations while the MacBook is
+// closed, and a local file cannot serve a remote process.
+//
+// "Enum-ish" columns stayed as String rather than becoming Postgres enums.
+// Adding a value to a Prisma enum requires a migration on both services; these
+// values (dispositions, stages, job types) change often enough that the
+// migration tax is not worth the type safety. Allowed values are documented
+// above each field and enforced in TypeScript.
+//
+// JSON-shaped columns are now real `Json` rather than encoded text.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Leads / contacts
+// ---------------------------------------------------------------------------
+
+model Contact {
+  id        String  @id @default(cuid())
+  firstName String?
+  lastName  String?
+
+  /// E.164, e.g. +17025551234. Unique — this is the dedupe key on import.
+  phone String @unique
+
+  companyName     String?
+  companyLocation String?
+  email           String?
+  /// Street address, editable on the Active Lead Card.
+  address         String?
+
+  /// How this contact entered the CRM: "import" | "manual" | "inbound".
+  source String @default("import")
+
+  /// User-defined fields, as { customFieldId: "value" }.
+  customFields Json @default("{}")
+
+  // --- pipeline removal (§1.3) ----------------------------------------------
+  // "Not Interested" removes a lead from the pipeline without deleting it.
+  // The contact and its history stay searchable; the retention sweep uses
+  // `pipelineRemovedAt` as the start of the 7-day clock, so a lead that was
+  // booked for a year and then removed keeps its history for 7 more days
+  // rather than losing it instantly.
+  pipelineRemovedAt DateTime?
+  /// "not_interested" | "wrong_number" | "dnc" | "manual"
+  removalReason     String?
+
+  /// Which pipeline stage this lead currently sits in on the kanban.
+  stageId String?
+  stage   PipelineStage? @relation(fields: [stageId], references: [id], onDelete: SetNull)
+
+  /// Position within the stage column, for manual drag ordering.
+  stagePosition Int @default(0)
+
+  /// Optional deal value, summed into the kanban column header.
+  dealValue Float?
+
+  /// Most recent disposition. See src/lib/dispositions.ts for allowed values.
+  lastDisposition String?
+  lastDialedAt    DateTime?
+  dialCount       Int       @default(0)
+  connectCount    Int       @default(0)
+  /// Consecutive no-answers, used by the "no answer N times" automation trigger.
+  noAnswerStreak  Int       @default(0)
+
+  /// True once any call to this lead was answered by a human.
+  everConnected Boolean @default(false)
+
+  /// Set when the operator marks the lead DNC. Blocks all dialing and messaging.
+  doNotContact Boolean @default(false)
+
+  listId String?
+  list   LeadList? @relation(fields: [listId], references: [id], onDelete: SetNull)
+
+  tags        ContactTag[]
+  activities  Activity[]
+  calls       Call[]
+  messages    Message[]
+  emails      EmailMessage[]
+  tasks       CallbackTask[]
+  queueItems  DialQueueItem[]
+  runs        AutomationRun[]
+  bookings    Booking[]
+  suggestions AiSuggestion[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([stageId, stagePosition])
+  @@index([listId])
+  @@index([lastDialedAt])
+  @@index([doNotContact])
+  @@index([pipelineRemovedAt])
+  // The calendar lead picker searches name/company/phone/email/location.
+  // A pg_trgm GIN index is added by a follow-up migration; see
+  // packages/db/prisma/migrations for the raw SQL.
+  @@index([companyName])
+}
+
+/// A named import batch. Every import creates one so it can be loaded as a
+/// dial session later.
+model LeadList {
+  id   String @id @default(cuid())
+  name String
+
+  /// Original uploaded filename, for the operator's reference.
+  sourceFile String?
+
+  addedCount    Int @default(0)
+  mergedCount   Int @default(0)
+  rejectedCount Int @default(0)
+
+  /// Per-row rejection reasons from the import report.
+  report Json @default("[]")
+
+  contacts  Contact[]
+  createdAt DateTime  @default(now())
+}
+
+model CustomField {
+  id    String @id @default(cuid())
+  /// Human label shown in the mapping UI and on the Active Lead Card.
+  label String @unique
+  /// "text" | "number" | "date"
+  type  String @default("text")
+
+  /// Whether this field renders on the Active Lead Card during a call.
+  showOnCard Boolean @default(false)
+  /// Order on the Active Lead Card.
+  position Int @default(0)
+
+  createdAt DateTime @default(now())
+}
+
+model Tag {
+  id    String @id @default(cuid())
+  name  String @unique
+  color String @default("#64748b")
+
+  contacts  ContactTag[]
+  createdAt DateTime     @default(now())
+}
+
+model ContactTag {
+  contactId String
+  tagId     String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tag       Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([contactId, tagId])
+  @@index([tagId])
+}
+
+// ---------------------------------------------------------------------------
+// Pipelines
+// ---------------------------------------------------------------------------
+
+model Pipeline {
+  id        String          @id @default(cuid())
+  name      String
+  isDefault Boolean         @default(false)
+  position  Int             @default(0)
+  stages    PipelineStage[]
+  createdAt DateTime        @default(now())
+}
+
+model PipelineStage {
+  id         String   @id @default(cuid())
+  pipelineId String
+  pipeline   Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+
+  name     String
+  color    String @default("#3b82f6")
+  position Int    @default(0)
+
+  contacts  Contact[]
+  createdAt DateTime  @default(now())
+
+  @@index([pipelineId, position])
+}
+
+// ---------------------------------------------------------------------------
+// Telephony
+// ---------------------------------------------------------------------------
+
+model PhoneNumber {
+  id String @id @default(cuid())
+
+  /// E.164 of the number we own.
+  e164        String  @unique
+  telnyxId    String?
+  countryCode String  @default("US")
+  region      String? // state, e.g. "NV"
+  locality    String? // city, e.g. "Henderson"
+  areaCode    String?
+
+  monthlyCost Float?
+  purchasedAt DateTime @default(now())
+  dialsSent   Int      @default(0)
+  active      Boolean  @default(true)
+
+  calls Call[]
+
+  @@index([areaCode])
+}
+
+model Call {
+  id        String  @id @default(cuid())
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  /// Telnyx Call Control leg id, used to issue mid-call commands.
+  callControlId String? @unique
+  callSessionId String?
+
+  fromNumberId String?
+  fromNumber   PhoneNumber? @relation(fields: [fromNumberId], references: [id], onDelete: SetNull)
+  fromE164     String?
+  toE164       String
+
+  /// "ringing" | "answered" | "completed" | "failed" | "busy" | "no_answer"
+  /// | "abandoned"
+  status String @default("ringing")
+
+  /// "outbound" | "inbound"
+  direction String @default("outbound")
+
+  /// Operator-set outcome. See packages/db has no opinion; the allowed values
+  /// live in apps/web/src/lib/dispositions.ts.
+  disposition String?
+
+  startedAt   DateTime  @default(now())
+  answeredAt  DateTime?
+  endedAt     DateTime?
+  durationSec Int       @default(0)
+
+  /// True when a voicemail drop was played into this call.
+  voicemailDropped Boolean @default(false)
+
+  notes String?
+
+  // --- answering machine detection (§4.2) -----------------------------------
+  /// Telnyx premium AMD verdict: "human" | "machine" | "fax" | "not_sure"
+  amdResult String?
+
+  // --- owner connect (§6) ---------------------------------------------------
+  /// True only when AMD said human, duration passed the threshold, the AI did
+  /// not flag gatekeeper/voicemail, and the operator did not disposition it as
+  /// a wrong number or automated system. Denormalised at call end so the
+  /// analytics rollup does not have to re-derive it across four tables.
+  ownerConnect Boolean @default(false)
+  /// A human answered but hung up inside the threshold — the operator's own
+  /// snap judgement that it was a gatekeeper or recording.
+  nonOwnerConnect Boolean @default(false)
+
+  // --- multi-line burst (§4.4) ----------------------------------------------
+  /// Groups the legs originated together so held calls can be traced back.
+  burstId String?
+  /// Seconds this leg spent in HeldOwnerQueue before being bridged or dropped.
+  heldSeconds Int @default(0)
+
+  // --- transcription (§5) ---------------------------------------------------
+  /// Path under data/recordings/, relative.
+  recordingPath String?
+  /// Full speaker-tagged transcript text, for search.
+  transcript String?
+  /// Structured segments: [{ speaker, text, startMs, endMs }]
+  transcriptSegments Json?
+  /// "pending" | "running" | "done" | "failed" | "skipped"
+  transcriptStatus String?
+
+  suggestions AiSuggestion[]
+
+  @@index([contactId, startedAt])
+  @@index([startedAt])
+  @@index([ownerConnect, startedAt])
+  @@index([burstId])
+}
+
+model Message {
+  id        String  @id @default(cuid())
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  /// "outbound" | "inbound"
+  direction String
+  body      String
+  fromE164  String?
+  toE164    String?
+
+  telnyxId String?
+  /// "queued" | "sent" | "delivered" | "failed" | "received"
+  status String  @default("queued")
+  error  String?
+
+  createdAt DateTime @default(now())
+
+  @@index([contactId, createdAt])
+  @@index([createdAt])
+}
+
+model EmailMessage {
+  id        String  @id @default(cuid())
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  /// "outbound" | "inbound"
+  direction String
+  subject   String?
+  body      String
+  fromAddr  String?
+  toAddr    String?
+
+  messageId String?
+  /// "queued" | "sent" | "failed"
+  status String  @default("queued")
+  error  String?
+  /// "smtp" | "resend"
+  provider String?
+
+  createdAt DateTime @default(now())
+
+  @@index([contactId, createdAt])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Unified timeline
+// ---------------------------------------------------------------------------
+
+/// Every notable thing that happened to a contact, in one table, so the
+/// Conversations page is a single reverse-chronological query.
+model Activity {
+  id        String  @id @default(cuid())
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  /// "call" | "sms" | "email" | "note" | "stage_change" | "disposition"
+  /// | "tag" | "import" | "automation" | "voicemail_drop"
+  type String
+
+  /// "outbound" | "inbound" | null (for non-directional events)
+  direction String?
+
+  /// Short human summary rendered in the feed, in operator language.
+  summary String
+
+  /// Full text searched by the Conversations search box: note bodies,
+  /// message bodies, call notes.
+  body String?
+
+  /// Type-specific payload (duration, disposition, stage names, ...).
+  meta Json @default("{}")
+
+  /// Link back to the underlying row when there is one.
+  callId    String?
+  messageId String?
+  emailId   String?
+
+  createdAt DateTime @default(now())
+
+  @@index([contactId, createdAt])
+  @@index([createdAt])
+  @@index([type, createdAt])
+}
+
+model CallbackTask {
+  id        String  @id @default(cuid())
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  dueAt       DateTime
+  note        String?
+  completed   Boolean   @default(false)
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([dueAt, completed])
+}
+
+// ---------------------------------------------------------------------------
+// Dial sessions
+// ---------------------------------------------------------------------------
+
+model DialSession {
+  id String @id @default(cuid())
+
+  /// "list" | "stage" — what was loaded into the queue.
+  sourceType String
+  sourceId   String?
+  sourceName String?
+
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+
+  dials      Int @default(0)
+  connects   Int @default(0)
+  booked     Int @default(0)
+  talkTimeSec Int @default(0)
+
+  queue DialQueueItem[]
+}
+
+model DialQueueItem {
+  id        String      @id @default(cuid())
+  sessionId String
+  session   DialSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  /// Manual drag order of the pending queue.
+  position Int @default(0)
+  /// "pending" | "dialing" | "done" | "skipped"
+  status String @default("pending")
+
+  @@unique([sessionId, contactId])
+  @@index([sessionId, position])
+}
+
+// ---------------------------------------------------------------------------
+// Audio
+// ---------------------------------------------------------------------------
+
+model VoicemailRecording {
+  id       String  @id @default(cuid())
+  name     String
+  /// Path relative to data/audio/.
+  filePath String
+  /// Public URL Telnyx fetches the file from during a drop (tunnel URL + path).
+  mimeType String?
+  sizeBytes Int?
+  isDefault Boolean @default(false)
+
+  createdAt DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Automations
+// ---------------------------------------------------------------------------
+
+model Automation {
+  id      String  @id @default(cuid())
+  name    String
+  enabled Boolean @default(false)
+
+  /// "disposition_set" | "stage_changed" | "tag_added" | "lead_imported"
+  /// | "no_answer_n_times" | "call_completed"
+  triggerType String
+  /// Trigger parameters, e.g. { "disposition": "booked" }.
+  triggerConfig Json @default("{}")
+
+  /// Ordered steps: [{ "type": "delay", "seconds": 3600 },
+  /// { "type": "send_sms", "templateId": "..." }, ...]
+  steps Json @default("[]")
+
+  runs      AutomationRun[]
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+}
+
+model AutomationRun {
+  id           String     @id @default(cuid())
+  automationId String
+  automation   Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  /// "pending" | "running" | "completed" | "failed" | "skipped"
+  status String @default("pending")
+
+  /// When a delay step is active, when the run should next be picked up.
+  runAt DateTime @default(now())
+  /// Index of the next step to execute.
+  stepIndex Int @default(0)
+
+  /// Appended execution log lines.
+  log Json @default("[]")
+
+  /// Deterministic key making job execution idempotent (§0.3). A Railway
+  /// restart mid-job re-enqueues it; the worker checks for a succeeded run
+  /// with this key and exits rather than sending the same SMS twice.
+  jobKey String? @unique
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([status, runAt])
+  @@index([automationId, createdAt])
+}
+
+model MessageTemplate {
+  id   String @id @default(cuid())
+  name String
+
+  /// "sms" | "email"
+  channel String
+
+  /// Email only.
+  subject String?
+  /// Supports {{first_name}}, {{last_name}}, {{company}}, {{location}}.
+  body String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+/// Flat key/value store for operator preferences. Keys are declared in
+/// src/lib/settings.ts — do not scatter raw string keys through the codebase.
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+/// Timestamped record that the operator acknowledged the TCPA exposure of
+/// bulk voicemail drops to never-called numbers. Kept as its own table rather
+/// than a Setting so it is an append-only audit trail.
+model Acknowledgement {
+  id   String @id @default(cuid())
+  /// "bulk_voicemail_never_called"
+  kind String
+  /// Exact wording shown at the time, so the record stays meaningful if the
+  /// copy is later reworded.
+  text        String
+  acceptedAt  DateTime @default(now())
+
+  @@index([kind, acceptedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Calendar (§2)
+// ---------------------------------------------------------------------------
+
+model Booking {
+  id        String  @id @default(cuid())
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  /// Stored in UTC; rendered in the operator's timezone setting.
+  startsAt        DateTime
+  durationMinutes Int      @default(30)
+
+  title       String
+  description String?
+
+  /// Google's event id, so edits and cancellations map cleanly both ways.
+  googleEventId String? @unique
+  /// Which Google calendar it was written to.
+  googleCalendarId String?
+
+  /// False when the lead had no email, so the UI can flag "no invite sent".
+  inviteSent Boolean @default(false)
+
+  /// "confirmed" | "cancelled" — mirrored from Google on reconcile.
+  status String @default("confirmed")
+
+  /// Set when the booking came from an accepted AI suggestion.
+  createdByAi Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  /// Last time the reconcile job compared this against Google.
+  lastSyncedAt DateTime?
+
+  @@index([startsAt])
+  @@index([contactId, startsAt])
+}
+
+// ---------------------------------------------------------------------------
+// Worker jobs (§0.3)
+// ---------------------------------------------------------------------------
+
+/// Work the local app wants done later. The app never calls the worker
+/// directly; it writes a row here and the worker picks it up.
+model ScheduledJob {
+  id String @id @default(cuid())
+
+  /// "automation.execute" | "sms.send" | "email.send" | "daily.brief"
+  type String
+  /// Deterministic; a duplicate enqueue with the same key is a no-op.
+  jobKey String @unique
+
+  payload Json @default("{}")
+  runAt   DateTime
+
+  /// "pending" | "claimed" | "done" | "failed"
+  status   String @default("pending")
+  attempts Int    @default(0)
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([status, runAt])
+}
+
+/// Dead-lettered jobs after retries are exhausted. Surfaced on the
+/// Automations page so failures are visible rather than silent.
+model FailedJob {
+  id String @id @default(cuid())
+
+  type    String
+  jobKey  String?
+  payload Json    @default("{}")
+
+  error      String
+  stackTrace String?
+  attempts   Int     @default(0)
+
+  failedAt   DateTime  @default(now())
+  /// Set when the operator retries it from the UI.
+  retriedAt  DateTime?
+
+  @@index([failedAt])
+}
+
+/// One row per retention sweep run (§1.4), so deletions are auditable.
+model RetentionSweepLog {
+  id String @id @default(cuid())
+
+  ranAt DateTime @default(now())
+
+  contactsExamined  Int @default(0)
+  recordsExamined   Int @default(0)
+  recordsDeleted    Int @default(0)
+  contactsDeleted   Int @default(0)
+  retainedInPipeline Int @default(0)
+  retainedByBooking  Int @default(0)
+
+  durationMs Int     @default(0)
+  error      String?
+
+  @@index([ranAt])
+}
+
+// ---------------------------------------------------------------------------
+// Analytics (§7)
+// ---------------------------------------------------------------------------
+
+/// Nightly rollup. The Analytics page reads these rather than scanning raw
+/// call rows — at ~1,200 dials/day the Call table passes a million rows within
+/// a year and live aggregation stops being viable.
+model DailyMetrics {
+  /// Date at midnight in the operator's timezone, stored as UTC midnight of
+  /// that local date. Boundaries are computed in the operator's timezone
+  /// (America/Vancouver, see OPERATOR_TIMEZONE in packages/db) — never in UTC
+  /// and never in the browser's zone.
+  date DateTime @id
+
+  dials             Int @default(0)
+  connects          Int @default(0)
+  voicemails        Int @default(0)
+  ownerConnects     Int @default(0)
+  nonOwnerConnects  Int @default(0)
+  overOneMinute     Int @default(0)
+  interested        Int @default(0)
+  booked            Int @default(0)
+  abandoned         Int @default(0)
+
+  talkTimeSec  Int   @default(0)
+  billedSec    Int   @default(0)
+  telephonyCost Float @default(0)
+
+  /// { "<hour 0-23>": dialCount } for the heatmap.
+  dialsByHour Json @default("{}")
+  /// { "<phoneNumberId>": { dials, connects } } for the per-number table.
+  byNumber Json @default("{}")
+
+  computedAt DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Call AI (§5)
+// ---------------------------------------------------------------------------
+
+/// Every AI extraction shown to the operator, accepted or not. Accept-rate per
+/// field type is surfaced on Analytics so the model's reliability is measured
+/// rather than assumed.
+model AiSuggestion {
+  id String @id @default(cuid())
+
+  callId String
+  call   Call   @relation(fields: [callId], references: [id], onDelete: Cascade)
+
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  /// "email" | "first_name" | "last_name" | "company" | "address"
+  /// | "booking" | "stage"
+  fieldType String
+
+  /// Proposed value, as text. Bookings store an ISO 8601 string.
+  value String?
+  /// The prospect's literal words justifying it. Null value means null field.
+  evidence   String?
+  confidence Float   @default(0)
+
+  /// Only for bookings: did the second verification pass agree (§5.5)?
+  verified       Boolean?
+  verifyReason   String?
+
+  /// "pending" | "accepted" | "dismissed" | "ignored" | "auto_applied"
+  outcome String @default("pending")
+
+  createdAt  DateTime  @default(now())
+  decidedAt  DateTime?
+
+  @@index([callId])
+  @@index([fieldType, outcome])
+  @@index([createdAt])
+}
+
+/// Phrases that auto-tag a contact when heard in a transcript.
+model ObjectionPhrase {
+  id     String @id @default(cuid())
+  phrase String @unique
+  /// Tag applied to the contact when this phrase appears.
+  tagName String
+  enabled Boolean @default(true)
+
+  createdAt DateTime @default(now())
+}

@@ -1,0 +1,34 @@
+{
+  "name": "actualizecrm",
+  "version": "2.0.0",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @actualizecrm/web",
+    "build": "npm run build --workspace @actualizecrm/web",
+    "start": "npm run start --workspace @actualizecrm/web",
+    "lint": "npm run lint --workspace @actualizecrm/web",
+    "tunnel": "tsx scripts/tunnel.ts",
+
+    "worker:dev": "npm run dev --workspace @actualizecrm/worker",
+    "worker:start": "npm run start --workspace @actualizecrm/worker",
+
+    "db:generate": "npm run generate --workspace @actualizecrm/db",
+    "db:migrate": "npm run migrate --workspace @actualizecrm/db",
+    "db:deploy": "npm run deploy --workspace @actualizecrm/db",
+    "db:studio": "npm run studio --workspace @actualizecrm/db",
+    "db:seed": "tsx packages/db/prisma/seed.ts",
+    "db:import-sqlite": "tsx scripts/migrate-sqlite-to-postgres.ts",
+
+    "voice-ai": "cd services/voice-ai && ./run.sh",
+
+    "typecheck": "tsc --noEmit -p apps/web/tsconfig.json && tsc --noEmit -p apps/worker/tsconfig.json"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5"
+  }
+}

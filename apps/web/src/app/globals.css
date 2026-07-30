@@ -1,0 +1,75 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  The operator stares at this for ~7 hours a day, so the shell is dark by
+  default and the type scale on the Active Lead Card is deliberately large
+  enough to read from a lean-back posture mid-call.
+*/
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  @apply bg-ink-950 text-ink-100 antialiased;
+  /* The app is a fixed shell; only inner regions scroll. */
+  overflow: hidden;
+}
+
+@layer components {
+  .panel {
+    @apply rounded-xl border border-ink-800 bg-ink-900;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2
+      text-sm font-medium transition-colors
+      disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  /* Gold on dark needs dark text to clear contrast, not white. */
+  .btn-primary {
+    @apply btn bg-brand-500 text-ink-950 hover:bg-brand-400;
+  }
+
+  .btn-ghost {
+    @apply btn border border-ink-700 bg-ink-850 text-ink-200 hover:bg-ink-800;
+  }
+
+  .btn-danger {
+    @apply btn bg-red-600 text-white hover:bg-red-500;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-ink-700 bg-ink-950 px-3 py-2 text-sm
+      text-ink-100 placeholder:text-ink-500
+      focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500;
+  }
+
+  .label {
+    @apply mb-1.5 block text-xs font-medium uppercase tracking-wide text-ink-400;
+  }
+
+  /* Thin scrollbars so the kanban and queue don't eat layout width. */
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: theme('colors.ink.700') transparent;
+  }
+  .scroll-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scroll-thin::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-ink-700;
+  }
+  .scroll-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}

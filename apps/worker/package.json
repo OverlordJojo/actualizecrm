@@ -1,0 +1,27 @@
+{
+  "name": "@actualizecrm/worker",
+  "version": "2.0.0",
+  "private": true,
+  "main": "dist/index.js",
+  "scripts": {
+    "//env": "Unlike Next.js, a plain Node process does not read .env.local. --env-file-if-exists keeps this working on Railway, where the file is absent and variables come from the platform.",
+    "//loader": "Use the tsx binary rather than `node --import tsx/esm`. The latter loads this CommonJS-configured package through the ESM pipeline, and the shared db export resolves to undefined at module scope in some files but not others — a genuinely confusing failure.",
+    "dev": "tsx --env-file-if-exists=../../.env.local src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node --env-file-if-exists=../../.env.local dist/index.js"
+  },
+  "dependencies": {
+    "@actualizecrm/db": "*",
+    "bullmq": "^5.34.2",
+    "ioredis": "^5.4.1",
+    "nodemailer": "^6.9.16",
+    "googleapis": "^144.0.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/nodemailer": "^6.4.17",
+    "tsx": "^4.19.2",
+    "typescript": "^5"
+  }
+}

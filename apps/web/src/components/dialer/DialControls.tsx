@@ -1,0 +1,256 @@
+'use client';
+
+import { useState } from 'react';
+import { cn } from '@/lib/cn';
+import { formatPhone, toE164 } from '@/lib/phone';
+import { DISPOSITIONS, type DispositionValue } from '@/lib/dispositions';
+import type { LineState } from '@/integrations/telnyx/useSoftphone';
+
+export interface SessionStats {
+  dials: number;
+  connects: number;
+  booked: number;
+  talkTimeSec: number;
+  startedAt: number | null;
+}
+
+const LINE_LABEL: Record<LineState, string> = {
+  offline: 'Offline',
+  connecting: 'Starting…',
+  ready: 'Ready',
+  dialing: 'Dialing',
+  ringing: 'Ringing',
+  connected: 'Connected',
+  ending: 'Ending…',
+};
+
+const LINE_TONE: Record<LineState, string> = {
+  offline: 'bg-red-500',
+  connecting: 'bg-amber-500',
+  ready: 'bg-green-500',
+  dialing: 'bg-brand-500',
+  ringing: 'bg-brand-500 animate-pulse',
+  connected: 'bg-green-400',
+  ending: 'bg-ink-500',
+};
+
+/**
+ * Region B. Session controls, a manual dial pad, live stats, and the five
+ * disposition buttons.
+ */
+export function DialControls({
+  lineState,
+  muted,
+  callerId,
+  sessionActive,
+  queueLength,
+  stats,
+  gapSeconds,
+  countdown,
+  onStartSession,
+  onPauseSession,
+  onEndSession,
+  onManualDial,
+  onHangup,
+  onToggleMute,
+  onDisposition,
+  onVoicemailDrop,
+}: {
+  lineState: LineState;
+  muted: boolean;
+  callerId: string | null;
+  sessionActive: boolean;
+  queueLength: number;
+  stats: SessionStats;
+  gapSeconds: number;
+  /// Seconds remaining before the dialer auto-advances, or null when idle.
+  countdown: number | null;
+  onStartSession: () => void;
+  onPauseSession: () => void;
+  onEndSession: () => void;
+  onManualDial: (phone: string) => void;
+  onHangup: () => void;
+  onToggleMute: () => void;
+  onDisposition: (value: DispositionValue) => void;
+  onVoicemailDrop: () => void;
+}) {
+  const [manual, setManual] = useState('');
+  const onCall = ['dialing', 'ringing', 'connected'].includes(lineState);
+  const manualValid = toE164(manual) !== null;
+
+  const elapsedMin = stats.startedAt
+    ? Math.max((Date.now() - stats.startedAt) / 60000, 1 / 60)
+    : 0;
+  const dialsPerHour = elapsedMin > 0 ? Math.round((stats.dials / elapsedMin) * 60) : 0;
+  const connectRate = stats.dials > 0 ? Math.round((stats.connects / stats.dials) * 100) : 0;
+
+  return (
+    <div className="flex w-[380px] shrink-0 flex-col gap-2.5">
+      {/* line status + caller id */}
+      <div className="flex items-center gap-2">
+        <span className={cn('h-2 w-2 rounded-full', LINE_TONE[lineState])} />
+        <span className="text-xs font-medium text-ink-200">
+          {LINE_LABEL[lineState]}
+        </span>
+        {callerId && (
+          <span className="ml-auto font-mono text-[11px] text-ink-400">
+            from {formatPhone(callerId)}
+          </span>
+        )}
+      </div>
+
+      {/* manual dial pad */}
+      <form
+        className="flex gap-1.5"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (manualValid && !onCall) {
+            onManualDial(manual);
+            setManual('');
+          }
+        }}
+      >
+        <input
+          className="input py-1.5 font-mono"
+          placeholder="Type a number to call"
+          value={manual}
+          onChange={(e) => setManual(e.target.value)}
+          disabled={onCall}
+        />
+        <button
+          type="submit"
+          className="btn-primary shrink-0 py-1.5"
+          disabled={!manualValid || onCall || lineState === 'offline'}
+        >
+          Call
+        </button>
+      </form>
+
+      {/* session + in-call controls */}
+      <div className="flex flex-wrap gap-1.5">
+        {!sessionActive ? (
+          <button
+            className="btn-primary py-1.5 text-xs"
+            onClick={onStartSession}
+            disabled={queueLength === 0 || lineState === 'offline'}
+            title={queueLength === 0 ? 'Load a list first' : undefined}
+          >
+            Start session ({queueLength})
+          </button>
+        ) : (
+          <>
+            <button className="btn-ghost py-1.5 text-xs" onClick={onPauseSession}>
+              Pause <Key>P</Key>
+            </button>
+            <button className="btn-ghost py-1.5 text-xs" onClick={onEndSession}>
+              End <Key>Esc</Key>
+            </button>
+          </>
+        )}
+
+        <button
+          className="btn-ghost py-1.5 text-xs"
+          onClick={onToggleMute}
+          disabled={lineState !== 'connected'}
+        >
+          {muted ? 'Unmute' : 'Mute'}
+        </button>
+
+        <button
+          className="btn-ghost py-1.5 text-xs"
+          onClick={onVoicemailDrop}
+          disabled={!onCall}
+        >
+          Voicemail <Key>V</Key>
+        </button>
+
+        <button
+          className="btn-danger py-1.5 text-xs"
+          onClick={onHangup}
+          disabled={!onCall}
+        >
+          Hang up <Key>Space</Key>
+        </button>
+      </div>
+
+      {countdown !== null && (
+        <div className="rounded-lg bg-brand-500/10 px-2.5 py-1.5 text-xs text-brand-300">
+          Next lead in {countdown}s
+          <span className="ml-1 text-ink-500">(gap {gapSeconds}s)</span>
+        </div>
+      )}
+
+      {/* dispositions */}
+      <div>
+        <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-ink-500">
+          Outcome
+        </div>
+        <div className="grid grid-cols-5 gap-1">
+          {DISPOSITIONS.map((d) => (
+            <button
+              key={d.value}
+              onClick={() => onDisposition(d.value)}
+              className="flex flex-col items-center gap-0.5 rounded-lg border border-ink-700 bg-ink-850 px-1 py-1.5 text-[10px] font-medium leading-tight text-ink-200 transition-colors hover:bg-ink-800"
+              style={{ borderBottomColor: d.color, borderBottomWidth: 2 }}
+              title={`${d.label} (${d.hotkey})`}
+            >
+              <span className="text-center">{d.label}</span>
+              <Key>{d.hotkey}</Key>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* stats — one compact row so Region B never overflows into the board */}
+      <div className="mt-auto grid grid-cols-6 gap-1 border-t border-ink-800 pt-2">
+        <Stat label="Dials" value={stats.dials} />
+        <Stat label="Conn" value={stats.connects} />
+        <Stat label="Rate" value={`${connectRate}%`} />
+        <Stat label="Talk" value={formatDuration(stats.talkTimeSec)} />
+        <Stat label="/hr" value={dialsPerHour} />
+        <Stat label="Booked" value={stats.booked} tone="good" />
+      </div>
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string | number;
+  tone?: 'good';
+}) {
+  return (
+    <div>
+      <div
+        className={cn(
+          'truncate text-sm font-semibold tabular-nums',
+          tone === 'good' ? 'text-green-400' : 'text-ink-100',
+        )}
+      >
+        {value}
+      </div>
+      <div className="text-[9px] text-ink-500">{label}</div>
+    </div>
+  );
+}
+
+function Key({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd className="rounded border border-ink-600 bg-ink-900 px-1 text-[9px] text-ink-400">
+      {children}
+    </kbd>
+  );
+}
+
+function formatDuration(sec: number): string {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
