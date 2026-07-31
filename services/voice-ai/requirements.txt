@@ -1,7 +1,0 @@
-fastapi>=0.115
-uvicorn[standard]>=0.32
-faster-whisper>=1.1.0
-numpy>=1.26
-httpx>=0.27
-torch>=2.4
-torchaudio>=2.4
