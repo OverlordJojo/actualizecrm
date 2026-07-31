@@ -65,18 +65,20 @@ around. The app surfaces this in Settings rather than failing quietly.
 3. Fill in:
    - **App name**: `ActualizeCRM`
    - **App description**: anything
-   - **Redirect URI**: the value of `SPOTIFY_REDIRECT_URI` in `.env.local`,
-     which points at the cloudflared tunnel, e.g.
-     `https://<tunnel>.trycloudflare.com/api/spotify/callback`.
-     Spotify has deprecated plain `http://localhost` redirects, so a tunnel
-     (or any HTTPS URL) is required. It must match **exactly** — no trailing
-     slash. A mismatch here is the single most common setup failure.
+   - **Redirect URI**: `http://127.0.0.1:3000/api/spotify/callback`
 
-     > Quick tunnels get a new hostname every restart. When the tunnel
-     > rotates, update `SPOTIFY_REDIRECT_URI` **and** add the new URL in the
-     > Spotify dashboard, or auth fails with `INVALID_CLIENT`.
-   - **Which API/SDKs are you planning to use?** tick **Web Playback SDK**
-     and **Web API**.
+     Spotify rejects `http://localhost` but allows the loopback IP
+     `127.0.0.1`. Use the IP. It must match **exactly** — no trailing
+     slash. A mismatch produces
+     `redirect_uri: Not matching configuration` on an otherwise blank
+     page, which is the single most common setup failure.
+
+     > Do **not** use the cloudflared tunnel here. Quick tunnels get a
+     > new hostname on every restart, so the dashboard entry goes stale
+     > the moment the tunnel bounces. The loopback address is registered
+     > once and then forgotten. The tunnel is only for Telnyx webhooks,
+     > which re-register automatically via `npm run tunnel`.
+
 4. Click **Save**.
 5. Open the app → **Settings**. Copy the **Client ID** into `.env.local` as
    `SPOTIFY_CLIENT_ID=`.

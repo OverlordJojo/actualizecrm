@@ -16,21 +16,26 @@ const TOKEN_URL = 'https://accounts.spotify.com/api/token';
 /**
  * Where Spotify sends the operator back after they approve.
  *
- * Spotify deprecated plain `http://localhost` redirects, so this points at the
- * cloudflared tunnel instead. Two things make this fragile in a way worth
- * knowing about:
+ * **This is the loopback IP, not a tunnel, and not `localhost`.**
  *
- *  1. The value must match **byte for byte** between the authorize request and
- *     the token exchange, or Spotify rejects the exchange with
- *     `INVALID_CLIENT: Invalid redirect URI`. That is why this is a single
- *     function called from both places rather than two string literals.
- *  2. A cloudflared *quick* tunnel gets a new hostname on every restart. When
- *     the tunnel rotates, set `SPOTIFY_REDIRECT_URI` to the new URL and add it
- *     to the Spotify dashboard's allow-list, or auth breaks with that same
- *     error.
+ * Spotify's rules here are specific and easy to get wrong:
+ *  - `http://localhost/...` is rejected — they deprecated it.
+ *  - `http://127.0.0.1/...` is **allowed**, and is their documented
+ *    recommendation for desktop and local apps.
+ *  - Anything else must be HTTPS.
+ *
+ * A cloudflared quick tunnel satisfies the HTTPS rule but gets a **new
+ * hostname on every restart**, which means the dashboard allow-list goes stale
+ * the moment the tunnel bounces and auth fails with
+ * `redirect_uri: Not matching configuration`. That is exactly what happened
+ * here, twice. The loopback address never changes, so it is registered once
+ * and then forgotten.
+ *
+ * The value must also match **byte for byte** between the authorize request
+ * and the token exchange, which is why this is one function called from both
+ * places rather than two string literals that can drift.
  */
-const FALLBACK_REDIRECT_URI =
-  'https://music-whale-lighting-solaris.trycloudflare.com/api/spotify/callback';
+const FALLBACK_REDIRECT_URI = 'http://127.0.0.1:3000/api/spotify/callback';
 
 export function spotifyRedirectUri(): string {
   return (
