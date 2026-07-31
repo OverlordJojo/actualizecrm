@@ -13,7 +13,32 @@ import { db } from '@/lib/db';
 const AUTH_URL = 'https://accounts.spotify.com/authorize';
 const TOKEN_URL = 'https://accounts.spotify.com/api/token';
 
-export const SPOTIFY_REDIRECT_URI = 'http://localhost:3000/api/spotify/callback';
+/**
+ * Where Spotify sends the operator back after they approve.
+ *
+ * Spotify deprecated plain `http://localhost` redirects, so this points at the
+ * cloudflared tunnel instead. Two things make this fragile in a way worth
+ * knowing about:
+ *
+ *  1. The value must match **byte for byte** between the authorize request and
+ *     the token exchange, or Spotify rejects the exchange with
+ *     `INVALID_CLIENT: Invalid redirect URI`. That is why this is a single
+ *     function called from both places rather than two string literals.
+ *  2. A cloudflared *quick* tunnel gets a new hostname on every restart. When
+ *     the tunnel rotates, set `SPOTIFY_REDIRECT_URI` to the new URL and add it
+ *     to the Spotify dashboard's allow-list, or auth breaks with that same
+ *     error.
+ */
+const FALLBACK_REDIRECT_URI =
+  'https://music-whale-lighting-solaris.trycloudflare.com/api/spotify/callback';
+
+export function spotifyRedirectUri(): string {
+  return (
+    process.env.SPOTIFY_REDIRECT_URI ||
+    process.env.NEXT_PUBLIC_SPOTIFY_REDIRECT_URI ||
+    FALLBACK_REDIRECT_URI
+  );
+}
 
 /// streaming = play audio in the browser (Premium only).
 /// The read scopes are for listing the operator's own playlists.
@@ -96,7 +121,7 @@ export async function buildAuthUrl(): Promise<string> {
   const params = new URLSearchParams({
     client_id: clientId,
     response_type: 'code',
-    redirect_uri: SPOTIFY_REDIRECT_URI,
+    redirect_uri: spotifyRedirectUri(),
     scope: SCOPES,
     code_challenge_method: 'S256',
     code_challenge: challenge,
@@ -115,7 +140,9 @@ export async function exchangeCode(code: string, verifier: string) {
     body: new URLSearchParams({
       grant_type: 'authorization_code',
       code,
-      redirect_uri: SPOTIFY_REDIRECT_URI,
+      // Must be identical to the value sent to /authorize — see the note on
+      // spotifyRedirectUri().
+      redirect_uri: spotifyRedirectUri(),
       client_id: clientId,
       code_verifier: verifier,
     }),

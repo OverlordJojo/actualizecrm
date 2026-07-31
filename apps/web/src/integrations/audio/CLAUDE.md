@@ -65,9 +65,16 @@ around. The app surfaces this in Settings rather than failing quietly.
 3. Fill in:
    - **App name**: `ActualizeCRM`
    - **App description**: anything
-   - **Redirect URI**: `http://localhost:3000/api/spotify/callback`
-     — must match **exactly**, including `http` (not https) and no trailing
+   - **Redirect URI**: the value of `SPOTIFY_REDIRECT_URI` in `.env.local`,
+     which points at the cloudflared tunnel, e.g.
+     `https://<tunnel>.trycloudflare.com/api/spotify/callback`.
+     Spotify has deprecated plain `http://localhost` redirects, so a tunnel
+     (or any HTTPS URL) is required. It must match **exactly** — no trailing
      slash. A mismatch here is the single most common setup failure.
+
+     > Quick tunnels get a new hostname every restart. When the tunnel
+     > rotates, update `SPOTIFY_REDIRECT_URI` **and** add the new URL in the
+     > Spotify dashboard, or auth fails with `INVALID_CLIENT`.
    - **Which API/SDKs are you planning to use?** tick **Web Playback SDK**
      and **Web API**.
 4. Click **Save**.
@@ -104,7 +111,7 @@ Adjust the volume slider and confirm it responds live.
 Settings → Audio → Connect Spotify. After approving, your playlists appear in
 the picker. If you get "INVALID_CLIENT: Invalid redirect URI", the redirect in
 the Spotify dashboard does not exactly match
-`http://localhost:3000/api/spotify/callback`.
+the value of `SPOTIFY_REDIRECT_URI`.
 
 **3. Music pauses on answer** ← the one that matters
 1. Music mode ON, playlist selected, **headphones on**.
