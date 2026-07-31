@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { startRecording } from '@/integrations/telnyx/recording';
+import { archiveRecording, processCall } from '@/integrations/ai/pipeline';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -67,6 +69,44 @@ export async function POST(request: Request) {
             where: { id: call.id },
             data: { status: 'answered', answeredAt: new Date() },
           });
+
+          // Start recording server-side. Failing to record must never take the
+          // call down, so this is best-effort.
+          startRecording(callControlId).catch((e) =>
+            console.error('[telnyx] record_start failed', e),
+          );
+        }
+        break;
+      }
+
+      // Premium AMD verdict (§4.2). Arrives separately from call.answered.
+      case 'call.machine.detection.ended':
+      case 'call.machine.premium.detection.ended': {
+        if (call) {
+          const verdict = (p as { result?: string }).result ?? null;
+          await db.call.update({
+            where: { id: call.id },
+            data: { amdResult: verdict },
+          });
+        }
+        break;
+      }
+
+      // Telnyx finished writing the recording. Archive it to R2 and run the
+      // post-call pipeline: transcript, extraction, analysis.
+      case 'call.recording.saved': {
+        if (call) {
+          const urls = (p as { recording_urls?: { mp3?: string; wav?: string } })
+            .recording_urls;
+          const url = urls?.mp3 ?? urls?.wav;
+          if (url) {
+            // Deliberately not awaited: Telnyx retries any response it does not
+            // get quickly, and transcription plus two model passes takes far
+            // longer than a webhook should hold open.
+            archiveRecording(call.id, url)
+              .then((key) => (key ? processCall(call.id) : null))
+              .catch((e) => console.error('[telnyx] post-call pipeline', e));
+          }
         }
         break;
       }
