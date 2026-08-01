@@ -27,11 +27,14 @@ export function useDialSession({
   queue,
   gapSeconds,
   audio,
+  linesPerBurst = 1,
   onCallEnded,
 }: {
   queue: ActiveLead[];
   gapSeconds: number;
   audio: RingAudioConfig;
+  /// §4.3. 1 keeps the classic one-at-a-time loop; 2–3 opens a burst.
+  linesPerBurst?: number;
   onCallEnded?: () => void;
 }) {
   const [sessionActive, setSessionActive] = useState(false);
@@ -44,6 +47,19 @@ export function useDialSession({
   const [dropping, setDropping] = useState<string | null>(null);
   /// Contact to screen-pop when an inbound call rings (add-on A).
   const [screenPopContactId, setScreenPopContactId] = useState<string | null>(null);
+  /// Multi-line state (§4). `held` is the queued-owner queue.
+  const [burstActive, setBurstActive] = useState(false);
+  const [held, setHeld] = useState<{ callId: string; toE164: string; heldSeconds: number }[]>([]);
+  const [governor, setGovernor] = useState<{
+    rate: number;
+    blocked: boolean;
+    allowedLines: number;
+    warning: string | null;
+  } | null>(null);
+
+  /// True while a burst is live, so an inbound transfer is auto-answered
+  /// instead of ringing as an ordinary inbound call.
+  const expectingTransfer = useRef(false);
   const [stats, setStats] = useState<SessionStats>({
     dials: 0,
     connects: 0,
@@ -82,6 +98,15 @@ export function useDialSession({
 
   const phone = useSoftphone({
     onIncoming: async ({ callerNumber }) => {
+      // A burst leg reaches the operator as a *transfer*, which arrives as an
+      // inbound invite. The operator already asked for this call by advancing,
+      // so making them press Answer would be a second decision about something
+      // they already decided — and every second of hesitation is a second the
+      // prospect spends listening to nothing.
+      if (expectingTransfer.current) {
+        expectingTransfer.current = false;
+        phone.answer();
+      }
       // Pop the card before the operator picks up, not after: the whole value
       // of a screen-pop is knowing who it is while deciding whether to answer.
       try {
@@ -268,9 +293,79 @@ export function useDialSession({
 
   // --- auto-advance --------------------------------------------------------
 
+  /**
+   * Opens a burst, or bridges whoever has been on hold longest (§4.3).
+   *
+   * Draining the held queue takes priority over dialing anybody new — the
+   * server decides that, so the two cannot disagree.
+   */
+  const advanceBurst = useCallback(
+    async (startIndex: number) => {
+      const upcoming = queueRef.current.slice(startIndex, startIndex + linesPerBurst);
+      if (upcoming.length === 0) {
+        sessionRef.current = false;
+        setSessionActive(false);
+        setActiveLead(null);
+        return;
+      }
+
+      setError(null);
+      expectingTransfer.current = true;
+
+      try {
+        const res = await fetch('/api/dialer/burst', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contactIds: upcoming.map((l) => l.id) }),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error ?? 'Could not open the burst.');
+
+        setGovernor(json.governor ?? null);
+        setBurstActive(true);
+
+        if (json.mode === 'bridged_held') {
+          // A held caller is coming to the softphone; the queue index does not
+          // move, because none of the upcoming leads were dialled.
+          indexRef.current = startIndex;
+          setIndex(startIndex);
+          const lead = queueRef.current.find((l) => l.id === json.bridged?.contactId);
+          if (lead) setActiveLead(lead);
+          return;
+        }
+
+        // Advance past everyone this burst actually dialled.
+        const dialled = (json.legs ?? []).length;
+        indexRef.current = startIndex + Math.max(dialled, 1);
+        setIndex(indexRef.current);
+        setActiveLead(upcoming[0] ?? null);
+        setStats((s2) => ({
+          ...s2,
+          dials: s2.dials + dialled,
+          startedAt: s2.startedAt ?? Date.now(),
+        }));
+      } catch (e) {
+        expectingTransfer.current = false;
+        setError(e instanceof Error ? e.message : 'Could not open the burst.');
+        if (sessionRef.current) startGap();
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [linesPerBurst],
+  );
+
   const advance = useCallback(() => {
     clearAdvance();
     const next = indexRef.current + 1;
+
+    // Multi-line takes a different path entirely: the server originates the
+    // legs and the winner is transferred in, so there is nothing for the
+    // browser to dial.
+    if (linesPerBurst > 1) {
+      void advanceBurst(next);
+      return;
+    }
+
     indexRef.current = next;
     setIndex(next);
 
@@ -282,7 +377,7 @@ export function useDialSession({
       return;
     }
     dialLead(lead);
-  }, [clearAdvance, dialLead]);
+  }, [clearAdvance, dialLead, linesPerBurst, advanceBurst]);
 
   const startGap = useCallback(() => {
     clearAdvance();
@@ -311,8 +406,13 @@ export function useDialSession({
     sessionRef.current = true;
     setSessionActive(true);
     setStats({ dials: 0, connects: 0, booked: 0, talkTimeSec: 0, startedAt: Date.now() });
+
+    if (linesPerBurst > 1) {
+      void advanceBurst(0);
+      return;
+    }
     dialLead(lead);
-  }, [dialLead]);
+  }, [dialLead, linesPerBurst, advanceBurst]);
 
   const pauseSession = useCallback(() => {
     sessionRef.current = false;
@@ -323,6 +423,8 @@ export function useDialSession({
   const endSession = useCallback(() => {
     sessionRef.current = false;
     setSessionActive(false);
+    setBurstActive(false);
+    expectingTransfer.current = false;
     clearAdvance();
     if (phone.isOnCall) phone.hangup();
     setActiveLead(null);
@@ -468,6 +570,34 @@ export function useDialSession({
 
   useEffect(() => () => clearAdvance(), [clearAdvance]);
 
+  // While a burst is live, keep the held queue and the governor in front of the
+  // operator. The poll also drives the server-side sweep, so a caller who has
+  // waited too long is retired within a couple of seconds rather than whenever
+  // the operator next advances.
+  useEffect(() => {
+    if (!burstActive) return;
+    let cancelled = false;
+
+    const tick = async () => {
+      try {
+        const res = await fetch('/api/dialer/burst');
+        if (!res.ok || cancelled) return;
+        const json = await res.json();
+        setHeld(json.held ?? []);
+        setGovernor(json.governor ?? null);
+      } catch {
+        // A failed poll is cosmetic; the worker sweep is the real backstop.
+      }
+    };
+
+    tick();
+    const t = setInterval(tick, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [burstActive]);
+
   return {
     lineState: phone.state,
     muted: phone.muted,
@@ -480,6 +610,9 @@ export function useDialSession({
     activeLead,
     callerId,
     incoming: phone.incoming,
+    burstActive,
+    held,
+    governor,
     answerInbound: phone.answer,
     declineInbound: phone.decline,
     screenPopContactId,

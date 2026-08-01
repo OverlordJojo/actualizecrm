@@ -226,6 +226,9 @@ export function DialerClient({
           incoming={call.incoming}
           onAnswerInbound={call.answerInbound}
           onDeclineInbound={call.declineInbound}
+          held={call.held}
+          governor={call.governor}
+          linesPerBurst={call.linesPerBurst}
         />
       </div>
 

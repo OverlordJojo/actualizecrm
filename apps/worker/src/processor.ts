@@ -13,6 +13,7 @@ import { sendEmail } from './lib/mailer';
 import { sendSms } from './lib/sms';
 import { reconcileCalendar } from './jobs/calendar';
 import { runDailyBrief } from './jobs/brief';
+import { sweepHeldCalls } from './jobs/sweep';
 
 /**
  * What the worker actually does with a job.
@@ -75,6 +76,17 @@ export async function processJob(job: ProcessableJob): Promise<unknown> {
     }
     lastSuccess[type] = new Date().toISOString();
     return drained;
+  }
+
+  // Like the drain: runs every ten seconds and almost always finds nothing.
+  // A run-log row per tick would bury every real automation.
+  if (type === 'dialer.sweep') {
+    const swept = await sweepHeldCalls();
+    if (swept.abandoned) {
+      console.log(`[sweep] abandoned ${swept.abandoned} held call(s)`);
+    }
+    lastSuccess[type] = new Date().toISOString();
+    return swept;
   }
 
   console.log(`[job] ${type} key=${jobKey} attempt=${(job.attemptsMade ?? 0) + 1}`);

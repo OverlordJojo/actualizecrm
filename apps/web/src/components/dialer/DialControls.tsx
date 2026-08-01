@@ -60,6 +60,9 @@ export function DialControls({
   incoming,
   onAnswerInbound,
   onDeclineInbound,
+  held,
+  governor,
+  linesPerBurst,
 }: {
   lineState: LineState;
   muted: boolean;
@@ -74,6 +77,11 @@ export function DialControls({
   incoming: { callerNumber: string; callerName?: string } | null;
   onAnswerInbound: () => void;
   onDeclineInbound: () => void;
+  /// Queued owners waiting on hold (§4.3).
+  held: { callId: string; toE164: string; heldSeconds: number }[];
+  /// Live abandonment governor state (§4.4).
+  governor: { rate: number; blocked: boolean; allowedLines: number; warning: string | null } | null;
+  linesPerBurst: number;
   /// Seconds remaining before the dialer auto-advances, or null when idle.
   countdown: number | null;
   /// Seconds since the prospect answered, or null when not connected.
@@ -212,6 +220,41 @@ export function DialControls({
         </button>
       </div>
 
+      {/* Queued owners. Shown because the operator needs to know somebody is
+          waiting — that is the whole reason the next advance bridges instead
+          of dialing. */}
+      {held.length > 0 && (
+        <div className="rounded-lg border border-amber-800 bg-amber-950/40 px-2.5 py-1.5">
+          <p className="text-xs font-medium text-amber-200">
+            {held.length} caller{held.length === 1 ? '' : 's'} on hold
+          </p>
+          <ul className="mt-0.5 space-y-0.5">
+            {held.map((h) => (
+              <li key={h.callId} className="flex justify-between text-[10px] text-amber-100/80">
+                <span className="font-mono">{formatPhone(h.toE164)}</span>
+                <span className="tabular-nums">{h.heldSeconds}s</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-0.5 text-[10px] text-amber-100/60">
+            The next advance bridges the longest wait instead of dialing.
+          </p>
+        </div>
+      )}
+
+      {governor?.warning && (
+        <div
+          className={cn(
+            'rounded-lg px-2.5 py-1.5 text-[11px]',
+            governor.blocked
+              ? 'border border-red-800 bg-red-950/50 text-red-200'
+              : 'border border-amber-800 bg-amber-950/40 text-amber-100',
+          )}
+        >
+          {governor.warning}
+        </div>
+      )}
+
       {dropping && (
         <div className="rounded-lg bg-violet-500/10 px-2.5 py-1.5 text-xs text-violet-200">
           Playing &ldquo;{dropping}&rdquo; — hangs up on its own when the
@@ -248,13 +291,19 @@ export function DialControls({
       </div>
 
       {/* stats — one compact row so Region B never overflows into the board */}
-      <div className="mt-auto grid grid-cols-6 gap-1 border-t border-ink-800 pt-2">
+      <div className="mt-auto grid grid-cols-7 gap-1 border-t border-ink-800 pt-2">
         <Stat label="Dials" value={stats.dials} />
         <Stat label="Conn" value={stats.connects} />
         <Stat label="Rate" value={`${connectRate}%`} />
         <Stat label="Talk" value={formatDuration(stats.talkTimeSec)} />
         <Stat label="/hr" value={dialsPerHour} />
         <Stat label="Booked" value={stats.booked} tone="good" />
+        {/* §4.4 requires the rolling abandonment rate to be visible live. */}
+        <Stat
+          label={linesPerBurst > 1 ? `Aband (${governor?.allowedLines ?? 1}L)` : 'Aband'}
+          value={governor ? `${(governor.rate * 100).toFixed(1)}%` : '—'}
+          tone={governor?.blocked ? 'bad' : undefined}
+        />
       </div>
     </div>
   );
@@ -267,14 +316,18 @@ function Stat({
 }: {
   label: string;
   value: string | number;
-  tone?: 'good';
+  tone?: 'good' | 'bad';
 }) {
   return (
     <div>
       <div
         className={cn(
           'truncate text-sm font-semibold tabular-nums',
-          tone === 'good' ? 'text-green-400' : 'text-ink-100',
+          tone === 'good'
+            ? 'text-green-400'
+            : tone === 'bad'
+              ? 'text-red-400'
+              : 'text-ink-100',
         )}
       >
         {value}

@@ -97,3 +97,25 @@ export async function mintWebrtcToken(): Promise<string> {
 
   return text.trim();
 }
+
+/**
+ * The SIP address the operator's browser is registered at.
+ *
+ * Multi-line bursts originate prospect legs server-side, so the winning leg has
+ * to be sent *to* the operator rather than dialled *by* them. Transferring to
+ * this URI rings the same softphone the dialer already owns, which is why the
+ * burst needs no second audio path.
+ */
+export async function operatorSipUri(): Promise<string | null> {
+  const connectionId = process.env.TELNYX_CONNECTION_ID;
+  if (!connectionId) return null;
+
+  try {
+    const credentialId = await ensureCredential(connectionId);
+    const { json } = await telnyx(`/telephony_credentials/${credentialId}`);
+    const username: string | undefined = json?.data?.sip_username;
+    return username ? `sip:${username}@sip.telnyx.com` : null;
+  } catch {
+    return null;
+  }
+}

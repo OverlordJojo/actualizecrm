@@ -29,6 +29,7 @@ type CallContextValue = ReturnType<typeof useDialSession> & {
   queue: ActiveLead[];
   setQueue: (leads: ActiveLead[]) => void;
   gapSeconds: number;
+  linesPerBurst: number;
   audio: RingAudioConfig;
   /// Seconds since the prospect answered. Null when not connected.
   callSeconds: number | null;
@@ -46,6 +47,7 @@ const DEFAULT_AUDIO: RingAudioConfig = {
 export function CallProvider({ children }: { children: React.ReactNode }) {
   const [queue, setQueue] = useState<ActiveLead[]>([]);
   const [gapSeconds, setGapSeconds] = useState(2);
+  const [linesPerBurst, setLinesPerBurst] = useState(1);
   const [audio, setAudio] = useState<RingAudioConfig>(DEFAULT_AUDIO);
   const [configLoaded, setConfigLoaded] = useState(false);
 
@@ -58,6 +60,11 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       .then((s) => {
         if (cancelled) return;
         setGapSeconds(Number(s['dialer.gapDelaySeconds'] ?? 2));
+        // Clamped again on the server before anything is originated; this is
+        // only what the UI offers.
+        setLinesPerBurst(
+          Math.min(Math.max(Number(s['dialer.linesPerBurst'] ?? 1), 1), 3),
+        );
         setAudio({
           mode: s['audio.musicInsteadOfRinging'] === 'true' ? 'music' : 'ringback',
           ringbackVolume: Number(s['audio.ringbackVolume'] ?? 0.5),
@@ -73,7 +80,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  const session = useDialSession({ queue, gapSeconds, audio });
+  const session = useDialSession({ queue, gapSeconds, audio, linesPerBurst });
 
   // --- live call timer (§3.2) ----------------------------------------------
   // Starts at answer, not at dial. A timer that counts ringing time tells the
@@ -100,11 +107,12 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       queue,
       setQueue,
       gapSeconds,
+      linesPerBurst,
       audio,
       callSeconds,
       configLoaded,
     }),
-    [session, queue, gapSeconds, audio, callSeconds, configLoaded],
+    [session, queue, gapSeconds, linesPerBurst, audio, callSeconds, configLoaded],
   );
 
   return <CallContext.Provider value={value}>{children}</CallContext.Provider>;

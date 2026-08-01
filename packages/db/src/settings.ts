@@ -69,6 +69,16 @@ export const SETTING_DEFAULTS = {
   // Multi-line dialing (§4)
   'dialer.linesPerBurst': '1',
   'dialer.holdMaxSeconds': '25',
+  /// What a queued owner hears. Must identify the caller — that is a legal
+  /// requirement on abandoned calls, not a nicety. Blank falls back to a
+  /// generated line using the email from-name.
+  'dialer.holdPrompt': '',
+  /// Optional VoicemailRecording played as hold music after the prompt.
+  'dialer.holdMusicRecordingId': '',
+  /// Whether a machine reached during a burst gets the default voicemail
+  /// dropped on it. Off by default — leaving a message on every machine is a
+  /// choice, not a side effect of turning on multi-line.
+  'dialer.burstVoicemailDrop': 'false',
 
   // Telephony
   'telnyx.webhookUrl': '',

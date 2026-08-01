@@ -21,6 +21,8 @@ export type JobType =
   | 'sms.send'
   | 'email.send'
   | 'voicemail.drop'
+  /// Retires multi-line callers held past the limit (§4.4).
+  | 'dialer.sweep'
   /// Moves due `ScheduledJob` rows written by the app into this queue.
   | 'jobs.drain';
 
@@ -118,4 +120,14 @@ export async function scheduleRepeatables(): Promise<void> {
     { repeat: { every: 20_000 }, jobId: 'repeat:jobs.drain' },
   );
   console.log('[queue] scheduled jobs.drain — every 20s');
+
+  // The hold limit is 10–45 seconds, so a minute-granularity cron would let a
+  // caller sit well past it. Ten seconds keeps the overshoot smaller than the
+  // shortest limit the operator can set.
+  await queue.add(
+    'dialer.sweep',
+    { type: 'dialer.sweep', jobKey: 'repeat:dialer.sweep' },
+    { repeat: { every: 10_000 }, jobId: 'repeat:dialer.sweep' },
+  );
+  console.log('[queue] scheduled dialer.sweep — every 10s');
 }

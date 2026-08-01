@@ -138,3 +138,105 @@ export function amdParams() {
     },
   };
 }
+
+/**
+ * Speaks a line into the call using Telnyx TTS.
+ *
+ * Used for the hold prompt on a queued owner. Silence makes people hang up
+ * within seconds, and this is also what satisfies the abandoned-call
+ * identification requirement in 47 CFR 64.1200 — the caller has to be
+ * identified within two seconds of the greeting, so the text must name the
+ * business rather than just saying "please hold".
+ */
+export async function speak(
+  callControlId: string,
+  text: string,
+  clientState?: string,
+): Promise<void> {
+  await callControl(callControlId, 'speak', {
+    payload: text,
+    voice: 'female',
+    language: 'en-US',
+    ...(clientState ? { client_state: clientState } : {}),
+  });
+}
+
+/// Stops whatever is currently playing, so hold music does not bleed into the
+/// conversation when a held call is finally bridged.
+export async function stopPlayback(callControlId: string): Promise<void> {
+  await callControl(callControlId, 'playback_stop', {});
+}
+
+/**
+ * Sends a live leg to the operator's softphone.
+ *
+ * A transfer rather than a bridge: the operator's browser is a SIP endpoint,
+ * not a Call Control leg we hold an id for, so there is nothing to bridge
+ * *to*. Transferring rings the softphone, which the dialer already knows how
+ * to answer.
+ */
+export async function transferToOperator(
+  callControlId: string,
+  sipUri: string,
+  fromE164: string,
+  clientState?: string,
+): Promise<void> {
+  await callControl(callControlId, 'transfer', {
+    to: sipUri,
+    // Show the prospect's number on the softphone, not our own outbound
+    // caller ID — the operator needs to know who they are about to talk to.
+    from: fromE164,
+    ...(clientState ? { client_state: clientState } : {}),
+  });
+}
+
+/// Originates an outbound leg server-side, with premium AMD enabled.
+export async function originate(params: {
+  to: string;
+  from: string;
+  connectionId: string;
+  webhookUrl: string;
+  clientState: string;
+  timeoutSecs?: number;
+}): Promise<{ callControlId: string | null; callSessionId: string | null }> {
+  const key = process.env.TELNYX_API_KEY;
+  if (!key) throw new Error('TELNYX_API_KEY is not set.');
+
+  const res = await fetch(`${BASE}/calls`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      connection_id: params.connectionId,
+      to: params.to,
+      from: params.from,
+      webhook_url: params.webhookUrl,
+      webhook_url_method: 'POST',
+      client_state: params.clientState,
+      timeout_secs: params.timeoutSecs ?? 30,
+      ...amdParams(),
+    }),
+    cache: 'no-store',
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    let detail = text;
+    try {
+      detail = JSON.parse(text)?.errors?.[0]?.detail ?? text;
+    } catch {
+      // keep the raw body
+    }
+    throw new Error(`Telnyx origination failed (${res.status}): ${detail}`);
+  }
+
+  const json = (await res.json()) as {
+    data?: { call_control_id?: string; call_session_id?: string };
+  };
+  return {
+    callControlId: json.data?.call_control_id ?? null,
+    callSessionId: json.data?.call_session_id ?? null,
+  };
+}

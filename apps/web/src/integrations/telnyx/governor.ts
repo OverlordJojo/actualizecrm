@@ -41,6 +41,42 @@ export interface GovernorState {
 }
 
 /**
+ * The threshold decision, separated from the query so it can be pinned at the
+ * exact boundaries.
+ *
+ * Both comparisons are `>=`. 3.0% is *at* the cap, not under it, and a rule
+ * that only engages above the limit has already been broken by the time it
+ * fires.
+ */
+export function clampLines(
+  rate: number,
+  configuredLines: number,
+): { allowedLines: number; warning: string | null; blocked: boolean } {
+  if (rate >= BLOCK_THRESHOLD) {
+    return {
+      allowedLines: 1,
+      blocked: true,
+      warning:
+        `Abandonment is ${(rate * 100).toFixed(1)}% over the last ${WINDOW_DAYS} days, at or above the 3% legal cap. ` +
+        'Multi-line dialing is blocked and the dialer is on a single line until the rolling rate recovers.',
+    };
+  }
+
+  if (rate >= WARN_THRESHOLD) {
+    const allowedLines = Math.max(configuredLines - 1, 1);
+    return {
+      allowedLines,
+      blocked: false,
+      warning:
+        `Abandonment is ${(rate * 100).toFixed(1)}% over the last ${WINDOW_DAYS} days, past the 2% mark. ` +
+        `Burst size has been reduced to ${allowedLines} automatically.`,
+    };
+  }
+
+  return { allowedLines: configuredLines, warning: null, blocked: false };
+}
+
+/**
  * The rolling rate.
  *
  * Denominator is **human answers**, not dials. A no-answer was never at risk of
@@ -75,22 +111,7 @@ export async function abandonmentState(): Promise<GovernorState> {
     MAX_LINES_PER_BURST,
   );
 
-  let allowedLines = configuredLines;
-  let warning: string | null = null;
-  let blocked = false;
-
-  if (rate >= BLOCK_THRESHOLD) {
-    allowedLines = 1;
-    blocked = true;
-    warning =
-      `Abandonment is ${(rate * 100).toFixed(1)}% over the last ${WINDOW_DAYS} days, at or above the 3% legal cap. ` +
-      'Multi-line dialing is blocked and the dialer is on a single line until the rolling rate recovers.';
-  } else if (rate >= WARN_THRESHOLD) {
-    allowedLines = Math.max(configuredLines - 1, 1);
-    warning =
-      `Abandonment is ${(rate * 100).toFixed(1)}% over the last ${WINDOW_DAYS} days, past the 2% mark. ` +
-      `Burst size has been reduced to ${allowedLines} automatically.`;
-  }
+  const { allowedLines, warning, blocked } = clampLines(rate, configuredLines);
 
   return {
     rate,
@@ -134,7 +155,10 @@ export async function recordAbandoned(callId: string, heldSeconds: number): Prom
     where: { id: callId },
     data: {
       status: 'abandoned',
-      disposition: 'no_answer',
+      // Its own disposition, not 'no_answer' — they *did* answer, which is
+      // exactly why it counts against the cap. Filing it as a no-answer would
+      // hide the calls the governor exists to measure.
+      disposition: 'abandoned',
       heldSeconds,
       endedAt: new Date(),
     },

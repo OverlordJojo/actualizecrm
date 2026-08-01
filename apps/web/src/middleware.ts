@@ -19,6 +19,9 @@ const PUBLIC_PATHS = [
   // The worker calls this every 15 minutes with the shared secret; there is no
   // operator at a browser when it runs. The route checks the secret itself.
   '/api/calendar/reconcile',
+  // Same shape: the worker calls this to hang up on held callers nobody is
+  // left to take. It checks the shared secret itself.
+  '/api/dialer/sweep',
   // PWA plumbing, fetched by the browser before any cookie is attached.
   '/manifest.webmanifest',
   '/sw.js',
