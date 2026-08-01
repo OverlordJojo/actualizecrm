@@ -68,6 +68,19 @@ are baked at build time.
   calendar picker, month/week/day views, trigram lead picker that includes
   removed leads, the §2.4 booking format, and a real `calendar.reconcile`.
   12/12 checks plus timezone arithmetic verified over 400 consecutive days.
+- **§7 Analytics** — twelve metrics with Owner Connect Rate as the headline,
+  eight presets plus a custom range, prior-period comparison in percentage
+  *points* for rates, funnel, hour heatmap, per-number table, AI accept rate.
+  6/6 checks.
+- **§5.6 Voice AI surfaces** — suggestion chips split at 0.85 confidence with
+  the evidence quote on hover, booking proposals that populate the panel and
+  never book, per-field auto-apply opt-in (all off by default).
+- **Add-on C — daily brief** — BullMQ job with a send window and a per-day
+  marker, week-over-week spam-label warning. 5/5 guard checks; no email sent.
+- **§4.4 abandonment governor** — rolling 30-day rate over human answers, 2%
+  reduces the burst, 3% hard-blocks, no override, CSV export. 7/7 checks.
+- **Build step 10 — Settings** — Dialer, Voice AI, Transcription, Daily brief
+  and Data (CSV export for all six tables). 4/4 checks.
 
 ## Two bugs found and fixed this session
 
@@ -88,11 +101,10 @@ stale-claim recovery.
 
 | Section | Notes |
 | --- | --- |
-| **§7 Analytics UI** | `DailyMetrics` and the nightly rollup work. Only the page is missing. |
-| **§5.6 Voice AI UI** | Suggestion chips, stage-suggestion pulse, live transcript pane, transcription settings. `/api/ai/suggestions` GET and POST are done. |
-| **Add-on C** | Daily brief email. `daily.brief` is scheduled every 5 minutes and returns "not yet implemented" — it needs to check the configured send time and exit early otherwise. |
-| **§4 Multi-line** | Build last, per the spec. |
-| **Build step 10** | Settings: Dialer, Custom Fields, Pipelines & Stages, Data export/backup. |
+| **§4 Multi-line — the dialing half** | The governor, the settings, the burst API and the abandoned-call export are done and tested. What is **not** built is the actual multi-leg origination: `/api/dialer/burst` returns the legs and caller IDs, but nothing yet originates the secondary legs through Call Control, bridges a `human` answer to the operator's WebRTC session, or drains a `HeldOwnerQueue`. That work is inseparable from live call testing, which is a human step here. |
+| **§5.6 stage-suggestion pulse** | The chips and booking proposals are in. The pulsing kanban outline that updates live as a call develops, and the manual-choice lockout, are not. |
+| **Live transcript pane** | The post-call transcript renders in the slide-over. The *live* pane beside the Active Lead Card during a call is not built. |
+| **Custom Fields / Pipelines & Stages settings** | Pipelines and stages are still managed from the kanban itself, which works; there is no dedicated Settings section. |
 
 ## Waiting on a human
 
@@ -111,6 +123,8 @@ absolute, and sending real email needs the operator's say-so.
 6. **Connect Google Calendar** in Settings → Calendar and make one booking.
    Signing into a Google account is yours to do, not something to automate.
    Everything up to the consent screen is tested; the event write is not.
+7. **Switch on the daily brief** in Settings and wait one morning. The guards
+   are tested; no brief has actually been sent, because that is an email.
 
 ## Traps already paid for
 
