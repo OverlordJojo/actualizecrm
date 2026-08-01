@@ -12,6 +12,7 @@ const NAV = [
   { href: '/dialer', label: 'Dialer', icon: PhoneIcon },
   { href: '/conversations', label: 'Conversations', icon: InboxIcon },
   { href: '/calendar', label: 'Calendar', icon: CalendarIcon },
+  { href: '/analytics', label: 'Analytics', icon: ChartIcon },
   { href: '/automations', label: 'Automations', icon: BoltIcon },
   { href: '/settings', label: 'Settings', icon: GearIcon },
 ] as const;
@@ -93,6 +94,15 @@ function CalendarIcon({ className }: { className?: string }) {
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="4" width="18" height="17" rx="2" />
       <path d="M3 10h18M8 2v4M16 2v4" />
+    </svg>
+  );
+}
+
+function ChartIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 3v18h18" />
+      <path d="M7 15l3.5-4 3 3L21 7" />
     </svg>
   );
 }

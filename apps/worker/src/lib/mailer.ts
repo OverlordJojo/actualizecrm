@@ -135,13 +135,22 @@ export interface SendEmailResult {
  * is built to make visible.
  */
 export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
-  const contact = await db.contact.findUnique({ where: { id: input.contactId } });
-  if (!contact) return { sent: false, skipped: 'lead no longer exists' };
+  // The daily brief is a system send: it goes to the operator, not a lead, so
+  // it has no contact to merge against and nothing to log on a timeline.
+  const isSystemSend = !input.contactId && Boolean(input.toOverride);
 
-  const to = input.toOverride ?? contact.email;
+  const contact = isSystemSend
+    ? null
+    : await db.contact.findUnique({ where: { id: input.contactId } });
+
+  if (!isSystemSend && !contact) {
+    return { sent: false, skipped: 'lead no longer exists' };
+  }
+
+  const to = input.toOverride ?? contact?.email;
   if (!to) return { sent: false, skipped: 'lead has no email address' };
 
-  if (contact.doNotContact && !input.toOverride) {
+  if (contact?.doNotContact && !input.toOverride) {
     return { sent: false, skipped: 'lead is marked do-not-contact' };
   }
 
@@ -162,12 +171,12 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
   }
 
   const merge = {
-    firstName: contact.firstName,
-    lastName: contact.lastName,
-    companyName: contact.companyName,
-    companyLocation: contact.companyLocation,
-    email: contact.email,
-    phone: contact.phone,
+    firstName: contact?.firstName,
+    lastName: contact?.lastName,
+    companyName: contact?.companyName,
+    companyLocation: contact?.companyLocation,
+    email: contact?.email,
+    phone: contact?.phone,
   };
   const subject = renderMergeFields(input.subject, merge);
   const body = renderMergeFields(input.body, merge);
@@ -180,9 +189,13 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
     return { sent: false, error: 'No from-address configured in Settings → Email.' };
   }
 
-  const record = await db.emailMessage.create({
+  // A system send has no contact row to hang an EmailMessage off, so it is
+  // sent without one rather than inventing a placeholder lead.
+  const record = isSystemSend
+    ? null
+    : await db.emailMessage.create({
     data: {
-      contactId: contact.id,
+      contactId: contact!.id,
       direction: 'outbound',
       subject,
       body,
@@ -199,10 +212,12 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
       const transport = smtpTransport();
       if (!transport) throw new Error('SMTP is not configured.');
       const info = await transport.sendMail({ from, to, subject, text: body });
-      await db.emailMessage.update({
-        where: { id: record.id },
-        data: { status: 'sent', provider: 'smtp', messageId: info.messageId },
-      });
+      if (record) {
+        await db.emailMessage.update({
+          where: { id: record.id },
+          data: { status: 'sent', provider: 'smtp', messageId: info.messageId },
+        });
+      }
     } else if (status.provider === 'resend') {
       const res = await fetch('https://api.resend.com/emails', {
         method: 'POST',
@@ -214,35 +229,41 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
       });
       const json = (await res.json()) as { id?: string; message?: string };
       if (!res.ok) throw new Error(json.message ?? `Resend returned ${res.status}`);
-      await db.emailMessage.update({
-        where: { id: record.id },
-        data: { status: 'sent', provider: 'resend', messageId: json.id ?? null },
-      });
+      if (record) {
+        await db.emailMessage.update({
+          where: { id: record.id },
+          data: { status: 'sent', provider: 'resend', messageId: json.id ?? null },
+        });
+      }
     } else {
       throw new Error(status.detail);
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await db.emailMessage.update({
-      where: { id: record.id },
-      data: { status: 'failed', error: message.slice(0, 500) },
-    });
-    return { sent: false, emailMessageId: record.id, error: message };
+    if (record) {
+      await db.emailMessage.update({
+        where: { id: record.id },
+        data: { status: 'failed', error: message.slice(0, 500) },
+      });
+    }
+    return { sent: false, emailMessageId: record?.id, error: message };
   }
+
+  if (isSystemSend) return { sent: true };
 
   await db.activity.create({
     data: {
-      contactId: contact.id,
+      contactId: contact!.id,
       type: 'email',
       direction: 'outbound',
       summary: input.templateName
         ? `Emailed "${subject}" (${input.templateName})`
         : `Emailed "${subject}"`,
       body,
-      emailId: record.id,
+      emailId: record!.id,
       meta: { to, templateName: input.templateName ?? null },
     },
   });
 
-  return { sent: true, emailMessageId: record.id };
+  return { sent: true, emailMessageId: record!.id };
 }

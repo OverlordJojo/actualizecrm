@@ -10,6 +10,8 @@ import {
   type VisibleCustomField,
 } from '@/components/dialer/ActiveLeadCard';
 import { DialControls } from '@/components/dialer/DialControls';
+import { SuggestionChips } from '@/components/dialer/SuggestionChips';
+import { BookingPanel } from '@/components/dialer/BookingPanel';
 import { useCall, formatCallTimer } from '@/components/call/CallProvider';
 import type { BoardData } from '@/components/pipeline/types';
 
@@ -46,6 +48,13 @@ export function DialerClient({
   const [leadCount, setLeadCount] = useState(initialLeadCount);
   const [board, setBoard] = useState(initialBoard);
   const [boardKey, setBoardKey] = useState(0);
+
+  /// Set when an AI booking suggestion is accepted. It populates the booking
+  /// panel; it never books (§5.6).
+  const [bookingProposal, setBookingProposal] = useState<{
+    iso: string;
+    evidence: string | null;
+  } | null>(null);
 
   const [listOptions, setListOptions] = useState(lists);
   const [selectedListId, setSelectedListId] = useState('');
@@ -177,6 +186,23 @@ export function DialerClient({
           visibleCustomFields={visibleCustomFields}
           onNotesChange={saveNotes}
           onFieldChange={saveField}
+          bookingPanel={
+            <>
+              <SuggestionChips
+                callId={null}
+                contactId={call.activeLead?.id ?? null}
+                onApplied={refreshBoard}
+                onBookingProposed={(iso, evidence) =>
+                  setBookingProposal({ iso, evidence })
+                }
+              />
+              <BookingPanel
+                contactId={call.activeLead?.id ?? null}
+                proposal={bookingProposal}
+                onBooked={refreshBoard}
+              />
+            </>
+          }
         />
         <DialControls
           lineState={call.lineState}

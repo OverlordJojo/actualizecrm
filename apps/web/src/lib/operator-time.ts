@@ -17,9 +17,12 @@ export { OPERATOR_TIMEZONE };
 
 /// The zone's UTC offset in milliseconds at a given instant, DST included.
 function offsetMs(at: Date, tz = OPERATOR_TIMEZONE): number {
+  // `hourCycle: 'h23'` rather than `hour12: false`: the latter renders midnight
+  // as "24" in several locales, which then needs a modulo to undo. h23 is
+  // defined as 0–23, so there is nothing to undo and nothing to get wrong.
   const dtf = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
-    hour12: false,
+    hourCycle: 'h23',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -33,7 +36,7 @@ function offsetMs(at: Date, tz = OPERATOR_TIMEZONE): number {
     n('year'),
     n('month') - 1,
     n('day'),
-    n('hour') % 24,
+    n('hour'),
     n('minute'),
     n('second'),
   );
@@ -105,14 +108,14 @@ export function addOperatorDays(at: Date, days: number, tz = OPERATOR_TIMEZONE):
 /// Monday-based week start, matching how a working week is planned.
 export function startOfOperatorWeek(at: Date, tz = OPERATOR_TIMEZONE): Date {
   const start = startOfOperatorDay(at, tz);
-  const weekday = Number(
-    new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' })
-      .format(start)
-      .replace(/Mon|Tue|Wed|Thu|Fri|Sat|Sun/, (m) =>
-        String(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(m)),
-      ),
-  );
-  return addOperatorDays(start, -weekday, tz);
+  // Derive the weekday from the calendar date arithmetically rather than by
+  // matching English weekday abbreviations, which breaks the moment anything
+  // formats in another locale.
+  const [y, m, d] = operatorDateKey(start, tz).split('-').map(Number);
+  const sundayBased = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  // Monday-based: a working week is planned Monday to Friday.
+  const mondayBased = (sundayBased + 6) % 7;
+  return addOperatorDays(start, -mondayBased, tz);
 }
 
 export function startOfOperatorMonth(at: Date, tz = OPERATOR_TIMEZONE): Date {
@@ -135,15 +138,16 @@ export function addOperatorMonths(at: Date, months: number, tz = OPERATOR_TIMEZO
 
 /// Hour of day (0–23) in the operator's zone.
 export function operatorHour(at: Date, tz = OPERATOR_TIMEZONE): number {
-  return Number(
-    new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: '2-digit', hour12: false })
-      .format(at)
-      .replace('24', '0'),
-  );
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    hourCycle: 'h23',
+    hour: '2-digit',
+  }).formatToParts(at);
+  return Number(parts.find((p) => p.type === 'hour')!.value);
 }
 
 export function formatOperatorTime(at: Date, tz = OPERATOR_TIMEZONE): string {
-  return new Intl.DateTimeFormat('en-CA', {
+  return new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
     hour: 'numeric',
     minute: '2-digit',
@@ -152,7 +156,7 @@ export function formatOperatorTime(at: Date, tz = OPERATOR_TIMEZONE): string {
 }
 
 export function formatOperatorDateTime(at: Date, tz = OPERATOR_TIMEZONE): string {
-  return new Intl.DateTimeFormat('en-CA', {
+  return new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
     weekday: 'short',
     month: 'short',

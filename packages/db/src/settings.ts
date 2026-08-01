@@ -42,6 +42,34 @@ export const SETTING_DEFAULTS = {
   'messaging.a2pStatus': 'unknown', // "unknown" | "approved" | "pending" | "missing"
   'messaging.a2pLastCheckedAt': '',
 
+  // Daily brief (add-on C)
+  'brief.enabled': 'false',
+  /// 24-hour local time in the operator's zone.
+  'brief.sendTime': '08:00',
+  'brief.recipient': '',
+  /// Written by the worker, not the operator: the local date the last brief
+  /// went out, so a five-minute tick cannot send five briefs.
+  'brief.lastSentDate': '',
+
+  // Analytics
+  /// Telnyx outbound rate per minute, used for the cost metrics.
+  'analytics.ratePerMinute': '0.005',
+
+  // Voice AI (§5.6)
+  /// Comma-separated field types the operator has opted into auto-applying.
+  /// Empty by default — nothing is auto-applied unless explicitly enabled.
+  'ai.autoApplyFields': '',
+  /// Auto-book with a visible undo window. Off by default; a booking written
+  /// to a real calendar without a human deciding is not recoverable politely.
+  'ai.autoBook': 'false',
+  'transcription.enabled': 'true',
+  /// Days before call audio is deleted by the retention sweep.
+  'transcription.retentionDays': '30',
+
+  // Multi-line dialing (§4)
+  'dialer.linesPerBurst': '1',
+  'dialer.holdMaxSeconds': '25',
+
   // Telephony
   'telnyx.webhookUrl': '',
 } as const;

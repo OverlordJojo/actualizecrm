@@ -7,6 +7,8 @@ import { EmailSettings } from '@/components/settings/EmailSettings';
 import { TemplatesSettings } from '@/components/settings/TemplatesSettings';
 import { MessagingSettings } from '@/components/settings/MessagingSettings';
 import { CalendarSettings } from '@/components/settings/CalendarSettings';
+import { DialerSettings } from '@/components/settings/DialerSettings';
+import { DataSettings } from '@/components/settings/DataSettings';
 
 export const dynamic = 'force-dynamic';
 
@@ -44,8 +46,9 @@ export default function SettingsPage() {
 
           <TemplatesSettings />
 
-          {/* Dialer / Custom Fields / Pipelines /
-              Data (step 10) land with their integrations. */}
+          <DialerSettings />
+
+          <DataSettings />
         </div>
       </div>
     </>

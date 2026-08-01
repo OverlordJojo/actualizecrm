@@ -12,6 +12,7 @@ import {
 import { sendEmail } from './lib/mailer';
 import { sendSms } from './lib/sms';
 import { reconcileCalendar } from './jobs/calendar';
+import { runDailyBrief } from './jobs/brief';
 
 /**
  * What the worker actually does with a job.
@@ -134,7 +135,7 @@ export async function processJob(job: ProcessableJob): Promise<unknown> {
         break;
 
       case 'daily.brief':
-        result = { pending: `${type} handler not yet implemented` };
+        result = await runDailyBrief(Boolean(payload.force));
         break;
 
       default:
