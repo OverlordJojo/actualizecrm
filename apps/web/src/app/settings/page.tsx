@@ -2,6 +2,10 @@ import { Suspense } from 'react';
 import { PageHeader } from '@/components/PageHeader';
 import { PhoneNumbers } from '@/components/settings/PhoneNumbers';
 import { AudioSettings } from '@/components/settings/AudioSettings';
+import { VoicemailSettings } from '@/components/settings/VoicemailSettings';
+import { EmailSettings } from '@/components/settings/EmailSettings';
+import { TemplatesSettings } from '@/components/settings/TemplatesSettings';
+import { MessagingSettings } from '@/components/settings/MessagingSettings';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,8 +27,16 @@ export default function SettingsPage() {
             <AudioSettings />
           </Suspense>
 
-          {/* Email (step 8), Messaging & A2P (step 9), Dialer / Custom Fields /
-              Pipelines / Data (step 10) land with their integrations. */}
+          <VoicemailSettings />
+
+          <EmailSettings />
+
+          <MessagingSettings />
+
+          <TemplatesSettings />
+
+          {/* Dialer / Custom Fields / Pipelines /
+              Data (step 10) land with their integrations. */}
         </div>
       </div>
     </>

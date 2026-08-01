@@ -56,6 +56,10 @@ export function DialControls({
   onToggleMute,
   onDisposition,
   onVoicemailDrop,
+  dropping,
+  incoming,
+  onAnswerInbound,
+  onDeclineInbound,
 }: {
   lineState: LineState;
   muted: boolean;
@@ -64,6 +68,12 @@ export function DialControls({
   queueLength: number;
   stats: SessionStats;
   gapSeconds: number;
+  /// Name of the recording playing into the call, or null.
+  dropping: string | null;
+  /// Set while an inbound call is ringing the browser (add-on A).
+  incoming: { callerNumber: string; callerName?: string } | null;
+  onAnswerInbound: () => void;
+  onDeclineInbound: () => void;
   /// Seconds remaining before the dialer auto-advances, or null when idle.
   countdown: number | null;
   /// Seconds since the prospect answered, or null when not connected.
@@ -107,6 +117,26 @@ export function DialControls({
           </span>
         )}
       </div>
+
+      {/* Inbound. Sits above everything because it is the only thing on this
+          panel with a few seconds to act on. */}
+      {incoming && (
+        <div className="rounded-lg border border-green-700 bg-green-950/50 px-3 py-2">
+          <p className="text-xs text-green-200">
+            Incoming call from{' '}
+            <span className="font-mono">{formatPhone(incoming.callerNumber)}</span>
+            {incoming.callerName ? ` — ${incoming.callerName}` : ''}
+          </p>
+          <div className="mt-1.5 flex gap-1.5">
+            <button className="btn-primary py-1 text-xs" onClick={onAnswerInbound}>
+              Answer
+            </button>
+            <button className="btn-ghost py-1 text-xs" onClick={onDeclineInbound}>
+              Decline
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* manual dial pad */}
       <form
@@ -168,7 +198,7 @@ export function DialControls({
         <button
           className="btn-ghost py-1.5 text-xs"
           onClick={onVoicemailDrop}
-          disabled={!onCall}
+          disabled={!onCall || dropping !== null}
         >
           Voicemail <Key>V</Key>
         </button>
@@ -181,6 +211,13 @@ export function DialControls({
           Hang up <Key>Space</Key>
         </button>
       </div>
+
+      {dropping && (
+        <div className="rounded-lg bg-violet-500/10 px-2.5 py-1.5 text-xs text-violet-200">
+          Playing &ldquo;{dropping}&rdquo; — hangs up on its own when the
+          recording finishes.
+        </div>
+      )}
 
       {countdown !== null && (
         <div className="rounded-lg bg-brand-500/10 px-2.5 py-1.5 text-xs text-brand-300">

@@ -36,6 +36,10 @@ export async function GET(request: Request) {
       companyName: true,
       companyLocation: true,
       phone: true,
+      // The Active Lead Card edits these inline (§3.1), so they have to come
+      // down with the queue rather than being fetched per lead mid-session.
+      email: true,
+      address: true,
       dealValue: true,
       lastDisposition: true,
       stageId: true,

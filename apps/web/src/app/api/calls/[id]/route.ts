@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { db } from '@/lib/db';
 import { DISPOSITION_BY_VALUE, isDisposition } from '@/lib/dispositions';
 import { formatPhone } from '@/lib/phone';
+import { fireTrigger } from '@/integrations/automations/triggers';
 
 export const runtime = 'nodejs';
 
@@ -72,7 +73,7 @@ export async function PATCH(
   if (disposition && isDisposition(disposition)) {
     const meta = DISPOSITION_BY_VALUE[disposition];
 
-    await db.contact.update({
+    const contactAfter = await db.contact.update({
       where: { id: call.contactId },
       data: {
         lastDisposition: disposition,
@@ -123,6 +124,18 @@ export async function PATCH(
         meta: { disposition, durationSec: updated.durationSec },
       },
     });
+
+    await fireTrigger('disposition_set', {
+      contactId: call.contactId,
+      disposition,
+    });
+
+    if (disposition === 'no_answer') {
+      await fireTrigger('no_answer_n_times', {
+        contactId: call.contactId,
+        noAnswerStreak: contactAfter.noAnswerStreak,
+      });
+    }
   }
 
   return NextResponse.json(updated);
@@ -161,6 +174,8 @@ export async function POST(
       },
     },
   });
+
+  await fireTrigger('call_completed', { contactId: call.contactId });
 
   return NextResponse.json({ logged: true });
 }

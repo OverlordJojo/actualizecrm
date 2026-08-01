@@ -40,6 +40,10 @@ export function useDialSession({
   const [callerId, setCallerId] = useState<string | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /// Name of the recording currently playing into the call, for Region B.
+  const [dropping, setDropping] = useState<string | null>(null);
+  /// Contact to screen-pop when an inbound call rings (add-on A).
+  const [screenPopContactId, setScreenPopContactId] = useState<string | null>(null);
   const [stats, setStats] = useState<SessionStats>({
     dials: 0,
     connects: 0,
@@ -77,6 +81,34 @@ export function useDialSession({
   const ringAudio = useRingAudio(audio);
 
   const phone = useSoftphone({
+    onIncoming: async ({ callerNumber }) => {
+      // Pop the card before the operator picks up, not after: the whole value
+      // of a screen-pop is knowing who it is while deciding whether to answer.
+      try {
+        const res = await fetch('/api/contacts/lookup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone: callerNumber }),
+        });
+        if (!res.ok) return;
+        const { contact } = await res.json();
+        setScreenPopContactId(contact.id);
+        setActiveLead({
+          id: contact.id,
+          firstName: contact.firstName,
+          lastName: contact.lastName,
+          companyName: contact.companyName,
+          companyLocation: contact.companyLocation,
+          phone: contact.phone,
+          dealValue: contact.dealValue,
+          lastDisposition: contact.lastDisposition,
+          stageId: contact.stageId,
+          stagePosition: contact.stagePosition ?? 0,
+        });
+      } catch {
+        // A failed lookup must not stop the phone from ringing.
+      }
+    },
     onRinging: () => {
       // In music mode the operator hears Spotify, not the carrier's ringback,
       // so the far-end audio is muted locally until they actually answer.
@@ -320,6 +352,46 @@ export function useDialSession({
     [patchCall, phone.isOnCall, phone.hangup, onCallEnded],
   );
 
+  /**
+   * Voicemail drop — hotkey V (build step 6).
+   *
+   * Telnyx plays the recording into the call and hangs up when the audio
+   * actually finishes, which the browser then sees as an ordinary hangup and
+   * auto-advances on. Nothing here hangs up directly: cutting the leg while the
+   * message is still playing is what leaves half a voicemail.
+   */
+  const dropVoicemail = useCallback(async () => {
+    const id = callIdRef.current;
+    if (!id || dropping) return;
+
+    setError(null);
+    try {
+      const res = await fetch('/api/voicemail/drop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          callId: id,
+          callControlId: phone.callControlId() ?? undefined,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? 'Could not drop voicemail.');
+
+      setDropping(json.recordingName);
+      setActiveLead((l) => (l ? { ...l, lastDisposition: 'voicemail' } : l));
+      onCallEnded?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not drop voicemail.');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dropping, phone.callControlId, onCallEnded]);
+
+  // The drop belongs to one call; clear it when the line frees up so the next
+  // lead does not inherit a "playing" badge.
+  useEffect(() => {
+    if (phone.state === 'ready' || phone.state === 'offline') setDropping(null);
+  }, [phone.state]);
+
   const hangupAndNext = useCallback(() => {
     if (phone.isOnCall) phone.hangup();
     else if (sessionRef.current) advance();
@@ -363,6 +435,11 @@ export function useDialSession({
           }
           break;
         }
+        case 'v':
+        case 'V':
+          e.preventDefault();
+          dropVoicemail();
+          break;
         case 'p':
         case 'P':
           e.preventDefault();
@@ -380,7 +457,14 @@ export function useDialSession({
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [hangupAndNext, setDisposition, pauseSession, startSession, endSession]);
+  }, [
+    hangupAndNext,
+    setDisposition,
+    pauseSession,
+    startSession,
+    endSession,
+    dropVoicemail,
+  ]);
 
   useEffect(() => () => clearAdvance(), [clearAdvance]);
 
@@ -395,9 +479,16 @@ export function useDialSession({
     sessionActive,
     activeLead,
     callerId,
+    incoming: phone.incoming,
+    answerInbound: phone.answer,
+    declineInbound: phone.decline,
+    screenPopContactId,
+    clearScreenPop: () => setScreenPopContactId(null),
     countdown,
     stats,
     index,
+    dropping,
+    dropVoicemail,
 
     startSession,
     pauseSession,

@@ -8,9 +8,8 @@ import {
   connection,
   type JobData,
 } from './queue';
-import { claim, markDone, markFailed } from './idempotency';
-import { runRetentionSweep } from './jobs/retention';
-import { rollupDay } from './jobs/analytics';
+import { markScheduledFailed } from './jobs/scheduled';
+import { processJob, lastSuccess } from './processor';
 
 /**
  * ActualizeCRM automation worker.
@@ -18,63 +17,15 @@ import { rollupDay } from './jobs/analytics';
  * Runs on Railway, 24/7, so scheduled work happens whether or not the
  * operator's MacBook is open. It does no dialing and has no UI — the local app
  * owns everything interactive.
+ *
+ * This file is wiring only: queue, health endpoint, shutdown. What a job
+ * actually does lives in `processor.ts`, which is importable without opening a
+ * Redis connection or binding a port.
  */
 
 const PORT = Number(process.env.PORT ?? 8080);
 
-/// Last successful run per job type, surfaced on /health.
-const lastSuccess: Record<string, string> = {};
-
-const worker = makeWorker(async (job) => {
-  const data = job.data as JobData;
-  const { type, jobKey } = data;
-
-  console.log(`[job] ${type} key=${jobKey} attempt=${job.attemptsMade + 1}`);
-
-  const c = await claim(jobKey, data.payload?.contactId as string | undefined);
-  if (c.alreadyDone) {
-    console.log(`[job] ${type} key=${jobKey} already completed — skipping`);
-    return { skipped: true };
-  }
-
-  try {
-    let result: unknown = null;
-
-    switch (type) {
-      case 'retention.sweep':
-        result = await runRetentionSweep();
-        break;
-
-      case 'analytics.rollup':
-        await rollupDay();
-        result = { rolledUp: true };
-        break;
-
-      case 'calendar.reconcile':
-        // Implemented alongside §2; a no-op until the operator connects a
-        // Google account, rather than a hard failure that fills the DLQ.
-        result = { skipped: 'calendar not connected' };
-        break;
-
-      case 'automation.execute':
-      case 'sms.send':
-      case 'email.send':
-      case 'daily.brief':
-        result = { pending: `${type} handler not yet implemented` };
-        break;
-
-      default:
-        throw new Error(`Unknown job type: ${type}`);
-    }
-
-    await markDone(c.runId, [{ at: new Date().toISOString(), result }]);
-    lastSuccess[type] = new Date().toISOString();
-    return result;
-  } catch (err) {
-    await markFailed(c.runId, err);
-    throw err;
-  }
-});
+const worker = makeWorker((job) => processJob(job));
 
 // Exhausted retries go to a dead-letter table the Automations page reads.
 worker.on('failed', async (job, err) => {
@@ -83,6 +34,11 @@ worker.on('failed', async (job, err) => {
   if (job.attemptsMade < attemptsAllowed) return;
 
   console.error(`[dlq] ${job.name} exhausted retries: ${err.message}`);
+
+  // A dead job must not sit in `claimed` looking like it is still running.
+  const scheduledJobId = job.data.payload?.scheduledJobId as string | undefined;
+  if (scheduledJobId) await markScheduledFailed(scheduledJobId);
+
   await db.failedJob
     .create({
       data: {

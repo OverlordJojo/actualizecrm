@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { db } from '@/lib/db';
+import { fireTrigger } from '@/integrations/automations/triggers';
 
 export const runtime = 'nodejs';
 
@@ -16,8 +17,7 @@ const bodySchema = z.object({
  * Moves a lead to a pipeline stage.
  *
  * Writes a stage_change activity so the move shows up on the contact timeline
- * and in Conversations. Automation triggers for stage_changed fire from here
- * once the automations engine lands (build step 8).
+ * and in Conversations, and fires the stage_changed automation trigger.
  */
 export async function POST(request: Request) {
   const parsed = bodySchema.safeParse(await request.json());
@@ -71,6 +71,14 @@ export async function POST(request: Request) {
         },
       },
     });
+
+    if (stageId) {
+      await fireTrigger('stage_changed', {
+        contactId,
+        stageId,
+        stageName: toName,
+      });
+    }
   }
 
   return NextResponse.json(updated);

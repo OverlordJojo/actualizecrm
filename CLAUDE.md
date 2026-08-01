@@ -18,8 +18,31 @@ real tradeoff, not an upgrade. The dialer now needs network connectivity to do
 anything at all.
 
 There is still no user/org/account model anywhere. Single-operator by design.
-**Do not add auth, orgs, roles, or invite flows.** If a change seems to need a
-`userId`, it is solving the wrong problem.
+**Do not add orgs, roles, invite flows, or a `userId` on anything.** If a change
+seems to need a `userId`, it is solving the wrong problem.
+
+### The one exception: the sign-in gate
+
+The app is deployed at a public URL with every lead, recording and transcript
+behind it, so there is a single-credential gate — added deliberately, on the
+operator's instruction, and scoped so it does not become a user model.
+
+- `AUTH_USERNAME`, `AUTH_PASSWORD_HASH` (`salt:scryptHash`, never plaintext) and
+  `AUTH_SECRET` in the environment. No `User` table, no roles, no invites.
+- `src/middleware.ts` gates everything except `/login`, the auth routes, PWA
+  plumbing, and **`/api/telnyx/webhook`** — Telnyx cannot log in, and gating it
+  breaks call records, voicemail drops and inbound calls in a way that reads as
+  a telephony fault rather than an auth change.
+- APIs answer `401`; pages redirect. A fetch that got an HTML login page with a
+  `200` on it would look like success and fail much later.
+- `src/lib/session.ts` is Web Crypto only, because middleware runs on the Edge
+  runtime. `src/lib/auth.ts` holds the `node:crypto` scrypt verification and is
+  imported solely by the login route.
+
+`AppShell` chooses between the shell and the bare login page. Its authenticated
+branch is written out once and never varies in shape, so React reconciles
+`<CallProvider>` to the same position on every navigation and does not remount
+it — see the call-survival rule below.
 
 ---
 
@@ -58,6 +81,9 @@ npm run db:import-sqlite # one-time v1 import
 npm run db:studio        # browse data
 
 npm run typecheck    # both services
+
+# The worker compiles against packages/db's *built* output, so `worker:dev`
+# and its build script build the shared package first. Do not remove that.
 ```
 
 A full live session needs **`npm run dev` + `npm run tunnel`**, plus
@@ -81,9 +107,12 @@ folder's `CLAUDE.md`.
 | `SPOTIFY_CLIENT_ID` / `_SECRET` | `apps/web/src/integrations/audio` |
 | `GOOGLE_CLIENT_ID` / `_SECRET` | `apps/web` calendar — OAuth, `calendar.events` |
 | `CALENDAR_ENCRYPTION_KEY` | `apps/web` calendar — AES-256-GCM, 32 bytes hex |
-| `SMTP_HOST` `SMTP_PORT` `SMTP_USER` `SMTP_PASS` | `apps/web/src/integrations/email` |
-| `RESEND_API_KEY` | `apps/web/src/integrations/email` — optional fallback |
+| `SMTP_HOST` `SMTP_PORT` `SMTP_USER` `SMTP_PASS` | **`apps/worker`** — the worker is the only sender; these must be set on Railway |
+| `RESEND_API_KEY` | `apps/worker` — optional fallback |
 | `WHISPER_MODEL` `OLLAMA_URL` `OLLAMA_MODEL` | `services/voice-ai` |
+| `AUTH_USERNAME` / `AUTH_PASSWORD_HASH` / `AUTH_SECRET` | `apps/web` — the sign-in gate |
+| `WORKER_URL` | `apps/web` — optional; only shortens the wait on "run this now" |
+| `APP_URL` | `apps/worker` — where Telnyx sends events for worker-originated calls |
 | `PUBLIC_WEBHOOK_URL` | written by `scripts/tunnel.ts` — never edit by hand |
 
 `.env.local` holds everything. `.env` holds only `DATABASE_URL`, because the

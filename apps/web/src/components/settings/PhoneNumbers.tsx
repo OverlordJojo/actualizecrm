@@ -14,6 +14,7 @@ interface OwnedNumber {
   purchasedAt: string;
   dialsSent: number;
   active: boolean;
+  routeInboundToBrowser: boolean;
 }
 
 interface SearchResult {
@@ -149,6 +150,20 @@ export function PhoneNumbers() {
     }
   }
 
+  /// Per-number inbound routing (add-on A). Optimistic: the toggle should feel
+  /// instant, and a failed write reloads the true value.
+  async function setInboundRouting(n: OwnedNumber, on: boolean) {
+    setOwned((prev) =>
+      prev.map((x) => (x.id === n.id ? { ...x, routeInboundToBrowser: on } : x)),
+    );
+    const res = await fetch(`/api/numbers/${n.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ routeInboundToBrowser: on }),
+    }).catch(() => null);
+    if (!res?.ok) loadOwned();
+  }
+
   const activeNumbers = owned.filter((n) => n.active);
 
   return (
@@ -243,8 +258,20 @@ export function PhoneNumbers() {
                 <span className="text-xs text-ink-500">
                   bought {new Date(n.purchasedAt).toLocaleDateString()}
                 </span>
+                <label
+                  className="ml-auto flex cursor-pointer items-center gap-1.5"
+                  title="When off, calls to this number still get logged and still create a callback task — they just do not ring the browser."
+                >
+                  <input
+                    type="checkbox"
+                    className="accent-brand-500"
+                    checked={n.routeInboundToBrowser}
+                    onChange={(e) => setInboundRouting(n, e.target.checked)}
+                  />
+                  <span className="text-xs text-ink-400">Route inbound</span>
+                </label>
                 <button
-                  className="ml-auto text-xs text-red-400 hover:underline"
+                  className="text-xs text-red-400 hover:underline"
                   onClick={() => release(n)}
                 >
                   Release

@@ -215,6 +215,11 @@ model PhoneNumber {
   dialsSent   Int      @default(0)
   active      Boolean  @default(true)
 
+  /// Whether a call *to* this number rings the browser softphone and pops the
+  /// contact (add-on A). Default on: a number you own that nobody can call
+  /// back on is a number working against you.
+  routeInboundToBrowser Boolean @default(true)
+
   calls Call[]
 
   @@index([areaCode])
@@ -442,9 +447,11 @@ model DialQueueItem {
 model VoicemailRecording {
   id       String  @id @default(cuid())
   name     String
-  /// Path relative to data/audio/.
+  /// R2 object key under `voicemail/`. v1 kept these in `data/audio/`, which
+  /// stopped working when the app moved off the laptop: Vercel's filesystem is
+  /// ephemeral, so a file written by one request is gone by the next. Telnyx
+  /// fetches the object by presigned URL at drop time.
   filePath String
-  /// Public URL Telnyx fetches the file from during a drop (tunnel URL + path).
   mimeType String?
   sizeBytes Int?
   isDefault Boolean @default(false)

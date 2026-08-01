@@ -23,8 +23,15 @@ export type LineState =
   | 'connected'
   | 'ending';
 
+export interface IncomingCall {
+  callerNumber: string;
+  callerName?: string;
+}
+
 export interface SoftphoneEvents {
   onRinging?: () => void;
+  /// An inbound call is ringing the browser. Used to screen-pop the contact.
+  onIncoming?: (info: IncomingCall) => void;
   onAnswered?: () => void;
   onEnded?: (info: {
     wasAnswered: boolean;
@@ -125,6 +132,8 @@ export function useSoftphone(events: SoftphoneEvents = {}) {
   const [state, setState] = useState<LineState>('offline');
   const [error, setError] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
+  /// Set while an inbound call is ringing and unanswered.
+  const [incoming, setIncoming] = useState<IncomingCall | null>(null);
 
   const clientRef = useRef<any>(null);
   const callRef = useRef<any>(null);
@@ -184,21 +193,44 @@ export function useSoftphone(events: SoftphoneEvents = {}) {
           const call = notification.call;
           callRef.current = call;
 
+          // Inbound legs arrive through the same notification stream as
+          // outbound ones. Telling them apart matters for more than labelling:
+          // an inbound call must not start the ringback music (that plays for
+          // the *operator* while they wait for a prospect) and must not be
+          // auto-answered.
+          const isInbound =
+            call.direction === 'inbound' ||
+            call.options?.remoteCallerNumber !== undefined &&
+              call.direction !== 'outbound';
+
           switch (call.state) {
             case 'new':
             case 'requesting':
             case 'trying':
-              setState('dialing');
+              if (!isInbound) setState('dialing');
               break;
 
             case 'ringing':
             case 'early':
               setState('ringing');
-              eventsRef.current.onRinging?.();
+              if (isInbound) {
+                const info: IncomingCall = {
+                  callerNumber:
+                    call.options?.remoteCallerNumber ??
+                    call.options?.callerNumber ??
+                    'unknown',
+                  callerName: call.options?.remoteCallerName,
+                };
+                setIncoming(info);
+                eventsRef.current.onIncoming?.(info);
+              } else {
+                eventsRef.current.onRinging?.();
+              }
               break;
 
             case 'active':
               answeredAtRef.current = Date.now();
+              setIncoming(null);
               setState('connected');
               eventsRef.current.onAnswered?.();
               break;
@@ -241,6 +273,7 @@ export function useSoftphone(events: SoftphoneEvents = {}) {
               answeredAtRef.current = null;
               callRef.current = null;
               setMuted(false);
+              setIncoming(null);
               setState('ready');
 
               eventsRef.current.onEnded?.({
@@ -307,6 +340,30 @@ export function useSoftphone(events: SoftphoneEvents = {}) {
     return call;
   }, []);
 
+  /// Picks up an inbound call.
+  const answer = useCallback(() => {
+    const call = callRef.current;
+    if (!call) return;
+    try {
+      call.answer({ remoteElement: ensureRemoteAudioElement() });
+    } catch {
+      setError('Could not answer that call.');
+    }
+  }, []);
+
+  /// Declines an inbound call without answering it. The prospect hears the
+  /// call end rather than being answered into silence.
+  const decline = useCallback(() => {
+    const call = callRef.current;
+    if (!call) return;
+    setIncoming(null);
+    try {
+      call.hangup();
+    } catch {
+      setState('ready');
+    }
+  }, []);
+
   const hangup = useCallback(() => {
     const call = callRef.current;
     if (!call) return;
@@ -340,7 +397,10 @@ export function useSoftphone(events: SoftphoneEvents = {}) {
     state,
     error,
     muted,
+    incoming,
     dial,
+    answer,
+    decline,
     hangup,
     toggleMute,
     callControlId,

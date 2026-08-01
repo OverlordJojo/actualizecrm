@@ -1,6 +1,7 @@
 import type { Prisma } from '@actualizecrm/db';
 import { db } from '@/lib/db';
 import { toE164 } from '@/lib/phone';
+import { fireTrigger } from '@/integrations/automations/triggers';
 import {
   CORE_FIELDS,
   CUSTOM_FIELD_PREFIX,
@@ -46,6 +47,9 @@ export async function runImport(req: ImportRequest): Promise<ImportReport> {
   });
 
   const rejectedRows: RejectedRow[] = [];
+  /// New lead ids, so the lead_imported automation trigger can fire per lead
+  /// once the import has actually committed.
+  const addedIds: string[] = [];
   let added = 0;
   let merged = 0;
 
@@ -158,6 +162,7 @@ export async function runImport(req: ImportRequest): Promise<ImportReport> {
       },
     });
 
+    addedIds.push(created.id);
     added++;
     seenInFile.add(phone);
   }
@@ -173,6 +178,13 @@ export async function runImport(req: ImportRequest): Promise<ImportReport> {
       report: rejectedRows as unknown as Prisma.InputJsonValue,
     },
   });
+
+  // Fired after the whole import commits rather than per row: an automation
+  // that texts new leads should not start sending while half the file is still
+  // being parsed and might yet be rejected.
+  for (const contactId of addedIds) {
+    await fireTrigger('lead_imported', { contactId, listId: list.id });
+  }
 
   return {
     listId: list.id,

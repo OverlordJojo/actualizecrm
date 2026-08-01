@@ -4,6 +4,35 @@ import { db } from '@/lib/db';
 
 export const runtime = 'nodejs';
 
+/// Stage columns in board order. Surfaces used to have to load the whole board
+/// just to populate a stage dropdown — the slide-over, the restore control and
+/// the automation builder all need the list and none of them need the leads.
+export async function GET(request: Request) {
+  const pipelineId = new URL(request.url).searchParams.get('pipelineId');
+
+  const stages = await db.pipelineStage.findMany({
+    where: pipelineId
+      ? { pipelineId }
+      : { pipeline: { isDefault: true } },
+    orderBy: { position: 'asc' },
+    select: { id: true, name: true, color: true, position: true, pipelineId: true },
+  });
+
+  // A database seeded before the default flag existed, or one where the
+  // operator unset it, should still populate a dropdown rather than an empty
+  // one that looks broken.
+  if (stages.length === 0 && !pipelineId) {
+    return NextResponse.json(
+      await db.pipelineStage.findMany({
+        orderBy: { position: 'asc' },
+        select: { id: true, name: true, color: true, position: true, pipelineId: true },
+      }),
+    );
+  }
+
+  return NextResponse.json(stages);
+}
+
 const createSchema = z.object({
   pipelineId: z.string().min(1),
   name: z.string().trim().min(1, 'Give the stage a name.'),

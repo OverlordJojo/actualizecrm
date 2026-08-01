@@ -81,16 +81,45 @@ export async function stopTranscription(callControlId: string): Promise<void> {
   await callControl(callControlId, 'transcription_stop', {});
 }
 
-/// Plays a voicemail recording into the call, then hangs up when it finishes.
+/**
+ * Plays a voicemail recording into the call.
+ *
+ * This does not hang up. Telnyx has no "play then hang up" primitive, and
+ * guessing a duration either truncates the message or leaves dead air on the
+ * prospect's voicemail. Instead the caller passes a `clientState`, Telnyx
+ * echoes it back on `call.playback.ended`, and the webhook hangs up at the
+ * moment the audio actually finished.
+ */
 export async function playAudio(
   callControlId: string,
   audioUrl: string,
+  clientState?: string,
 ): Promise<void> {
   await callControl(callControlId, 'playback_start', {
     audio_url: audioUrl,
     // One pass — a looping voicemail drop would be a genuinely bad outcome.
     loop: 1,
+    ...(clientState ? { client_state: clientState } : {}),
   });
+}
+
+/// Telnyx `client_state` is base64 on the wire and echoed back on every event
+/// for the call. It is how a webhook learns what a command was for without the
+/// two services sharing anything but the database.
+export function encodeClientState(state: Record<string, unknown>): string {
+  return Buffer.from(JSON.stringify(state)).toString('base64');
+}
+
+export function decodeClientState(
+  raw: string | undefined | null,
+): Record<string, unknown> | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, 'base64').toString('utf8'));
+    return typeof parsed === 'object' && parsed !== null ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function hangup(callControlId: string): Promise<void> {

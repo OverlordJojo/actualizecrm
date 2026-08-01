@@ -3,6 +3,19 @@
 Owns sending email from the operator's **own inbox**, so replies land where
 they normally would and the prospect sees a real person's address.
 
+> **Where the sending actually happens changed in build step 8.** The mailer
+> lives on the Railway worker (`apps/worker/src/lib/mailer.ts`), not here. An
+> automation that emails a lead at 9am has to go out with the laptop shut, and
+> having two senders would mean two places the daily cap is enforced and two
+> sets of SMTP credentials to keep in step.
+>
+> The app queues a `ScheduledJob` and optionally nudges the worker so a test
+> send does not sit for twenty seconds looking broken. **`SMTP_*` therefore has
+> to be set on Railway**, not only in `.env.local` — Settings → Email says so,
+> but only after a send has already failed. Everything below about Gmail app
+> passwords, limits and deliverability still applies; it is the same
+> Nodemailer transport, just running somewhere else.
+
 ## What this module does
 
 - Connects to the operator's SMTP server via Nodemailer (Gmail, Outlook,

@@ -49,6 +49,20 @@ export function LeftRail() {
           </Link>
         );
       })}
+
+      <button
+        onClick={async () => {
+          await fetch('/api/auth/logout', { method: 'POST' });
+          // Full reload so the softphone and any in-memory call state go with
+          // the session rather than lingering on an unauthenticated page.
+          window.location.href = '/login';
+        }}
+        title="Sign out"
+        className="mt-auto flex w-[60px] flex-col items-center gap-1 rounded-lg px-1 py-2.5 text-ink-500 transition-colors hover:bg-ink-850 hover:text-ink-200"
+      >
+        <SignOutIcon className="h-[22px] w-[22px]" />
+        <span className="text-[10px] font-medium leading-none">Sign out</span>
+      </button>
     </nav>
   );
 }
@@ -77,6 +91,16 @@ function BoltIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
       <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z" />
+    </svg>
+  );
+}
+
+function SignOutIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <path d="m16 17 5-5-5-5" />
+      <path d="M21 12H9" />
     </svg>
   );
 }

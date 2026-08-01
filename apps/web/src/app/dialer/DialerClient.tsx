@@ -82,6 +82,28 @@ export function DialerClient({
     }
   }
 
+  /// Inline edits from the Active Lead Card (§3.1). Returns an error message
+  /// for the card to show, or null. The card keeps the operator's text either
+  /// way — silently reverting what someone just typed mid-call is worse than
+  /// showing them why it did not stick.
+  const saveField = useCallback(
+    async (leadId: string, field: string, value: string): Promise<string | null> => {
+      try {
+        const res = await fetch(`/api/contacts/${leadId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ [field]: value }),
+        });
+        if (res.ok) return null;
+        const json = await res.json().catch(() => null);
+        return json?.error ?? 'Could not save that.';
+      } catch {
+        return 'Could not reach the server to save that.';
+      }
+    },
+    [],
+  );
+
   const saveNotes = useCallback(async (leadId: string, notes: string) => {
     await fetch('/api/contacts/notes', {
       method: 'POST',
@@ -154,6 +176,7 @@ export function DialerClient({
           lead={call.activeLead}
           visibleCustomFields={visibleCustomFields}
           onNotesChange={saveNotes}
+          onFieldChange={saveField}
         />
         <DialControls
           lineState={call.lineState}
@@ -172,9 +195,11 @@ export function DialerClient({
           onHangup={call.hangup}
           onToggleMute={call.toggleMute}
           onDisposition={call.setDisposition}
-          onVoicemailDrop={() => {
-            /* build step 6 */
-          }}
+          onVoicemailDrop={call.dropVoicemail}
+          dropping={call.dropping}
+          incoming={call.incoming}
+          onAnswerInbound={call.answerInbound}
+          onDeclineInbound={call.declineInbound}
         />
       </div>
 

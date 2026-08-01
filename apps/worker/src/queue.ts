@@ -19,7 +19,10 @@ export type JobType =
   | 'analytics.rollup'
   | 'daily.brief'
   | 'sms.send'
-  | 'email.send';
+  | 'email.send'
+  | 'voicemail.drop'
+  /// Moves due `ScheduledJob` rows written by the app into this queue.
+  | 'jobs.drain';
 
 export interface JobData {
   type: JobType;
@@ -91,6 +94,7 @@ export async function scheduleRepeatables(): Promise<void> {
     { type: 'retention.sweep', pattern: '0 3 * * *', note: '03:00 PT daily' },
     { type: 'analytics.rollup', pattern: '30 3 * * *', note: '03:30 PT daily' },
     { type: 'calendar.reconcile', pattern: '*/15 * * * *', note: 'every 15 min' },
+    { type: 'daily.brief', pattern: '*/5 * * * *', note: 'every 5 min, sends at the configured time' },
   ];
 
   for (const r of repeatables) {
@@ -104,4 +108,14 @@ export async function scheduleRepeatables(): Promise<void> {
     );
     console.log(`[queue] scheduled ${r.type} — ${r.note}`);
   }
+
+  // The drain runs on an interval rather than a cron pattern: cron's floor is
+  // one minute, and an automation the operator just switched on should not sit
+  // idle for most of a minute before its first step moves.
+  await queue.add(
+    'jobs.drain',
+    { type: 'jobs.drain', jobKey: 'repeat:jobs.drain' },
+    { repeat: { every: 20_000 }, jobId: 'repeat:jobs.drain' },
+  );
+  console.log('[queue] scheduled jobs.drain — every 20s');
 }

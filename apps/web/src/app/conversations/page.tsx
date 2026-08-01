@@ -1,15 +1,15 @@
-import { PageHeader } from '@/components/PageHeader';
+import { db } from '@/lib/db';
+import { ConversationsClient } from '@/components/conversations/ConversationsClient';
 
-export default function ConversationsPage() {
-  return (
-    <>
-      <PageHeader
-        title="Conversations"
-        subtitle="Calls, texts and email in one feed"
-      />
-      <div className="flex flex-1 items-center justify-center text-sm text-ink-500">
-        Built in build step 7.
-      </div>
-    </>
-  );
+export const dynamic = 'force-dynamic';
+
+export default async function ConversationsPage() {
+  // Lists are small, stable, and needed to render the filter bar — fetching
+  // them on the server keeps the page from flashing an empty dropdown.
+  const lists = await db.leadList.findMany({
+    orderBy: { createdAt: 'desc' },
+    select: { id: true, name: true },
+  });
+
+  return <ConversationsClient lists={lists} />;
 }

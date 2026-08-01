@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
 import { db } from '@/lib/db';
 import { releaseNumber, TelnyxError } from '@/integrations/telnyx/client';
 
@@ -32,4 +33,29 @@ export async function DELETE(
   });
 
   return NextResponse.json({ released: true, number: updated });
+}
+
+const patchSchema = z.object({
+  routeInboundToBrowser: z.boolean(),
+});
+
+/// Per-number inbound routing (add-on A). Switching it off does not stop the
+/// call being logged or a missed-call task being created — it only stops the
+/// browser ringing, which is what an operator means by "don't route this one
+/// to me".
+export async function PATCH(
+  request: Request,
+  { params }: { params: { id: string } },
+) {
+  const parsed = patchSchema.safeParse(await request.json());
+  if (!parsed.success) {
+    return NextResponse.json({ error: 'Invalid update.' }, { status: 400 });
+  }
+
+  const updated = await db.phoneNumber.update({
+    where: { id: params.id },
+    data: { routeInboundToBrowser: parsed.data.routeInboundToBrowser },
+  });
+
+  return NextResponse.json(updated);
 }
