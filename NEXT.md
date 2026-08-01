@@ -81,6 +81,13 @@ are baked at build time.
   reduces the burst, 3% hard-blocks, no override, CSV export. 7/7 checks.
 - **Build step 10 — Settings** — Dialer, Voice AI, Transcription, Daily brief
   and Data (CSV export for all six tables). 4/4 checks.
+- **§4 Multi-line** — bursts of up to 3 legs, each from a different owned
+  number with premium AMD; machines/faxes/IVRs disposed of silently; the first
+  human transferred to the softphone; every additional human held behind an
+  identification prompt; the oldest hold bridged ahead of any new burst; a
+  10-second worker sweep that retires anyone past the limit. 18/18 queue and
+  governor checks, plus 16/16 threshold boundaries pinned at 1.99/2.00/2.99/
+  3.00%.
 
 ## Two bugs found and fixed this session
 
@@ -101,7 +108,6 @@ stale-claim recovery.
 
 | Section | Notes |
 | --- | --- |
-| **§4 Multi-line — the dialing half** | The governor, the settings, the burst API and the abandoned-call export are done and tested. What is **not** built is the actual multi-leg origination: `/api/dialer/burst` returns the legs and caller IDs, but nothing yet originates the secondary legs through Call Control, bridges a `human` answer to the operator's WebRTC session, or drains a `HeldOwnerQueue`. That work is inseparable from live call testing, which is a human step here. |
 | **§5.6 stage-suggestion pulse** | The chips and booking proposals are in. The pulsing kanban outline that updates live as a call develops, and the manual-choice lockout, are not. |
 | **Live transcript pane** | The post-call transcript renders in the slide-over. The *live* pane beside the Active Lead Card during a call is not built. |
 | **Custom Fields / Pipelines & Stages settings** | Pipelines and stages are still managed from the kanban itself, which works; there is no dedicated Settings section. |
@@ -125,6 +131,14 @@ absolute, and sending real email needs the operator's say-so.
    Everything up to the consent screen is tested; the event write is not.
 7. **Switch on the daily brief** in Settings and wait one morning. The guards
    are tested; no brief has actually been sent, because that is an email.
+8. **A two-line burst.** Set Lines per burst to 2 in Settings → Dialer, load a
+   queue containing your own cell plus one other number you control, and start
+   a session. Confirm: both ring, the first answer reaches your softphone
+   without you pressing Answer, the second hears the identification prompt, the
+   held count appears in Region B, and the next advance bridges the held caller
+   rather than dialing anyone new. Then let one sit past the hold limit and
+   confirm it hangs up with the apology and lands in the abandoned CSV. This is
+   the one piece of §4 that only proves out against real simultaneous calls.
 
 ## Traps already paid for
 
