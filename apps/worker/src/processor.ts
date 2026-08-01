@@ -11,6 +11,7 @@ import {
 } from './jobs/automations';
 import { sendEmail } from './lib/mailer';
 import { sendSms } from './lib/sms';
+import { reconcileCalendar } from './jobs/calendar';
 
 /**
  * What the worker actually does with a job.
@@ -101,9 +102,7 @@ export async function processJob(job: ProcessableJob): Promise<unknown> {
         break;
 
       case 'calendar.reconcile':
-        // Implemented alongside §2; a no-op until the operator connects a
-        // Google account, rather than a hard failure that fills the DLQ.
-        result = { skipped: 'calendar not connected' };
+        result = await reconcileCalendar();
         break;
 
       case 'voicemail.drop':

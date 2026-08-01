@@ -6,6 +6,7 @@ import { VoicemailSettings } from '@/components/settings/VoicemailSettings';
 import { EmailSettings } from '@/components/settings/EmailSettings';
 import { TemplatesSettings } from '@/components/settings/TemplatesSettings';
 import { MessagingSettings } from '@/components/settings/MessagingSettings';
+import { CalendarSettings } from '@/components/settings/CalendarSettings';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,6 +26,14 @@ export default function SettingsPage() {
             fallback={<div className="text-xs text-ink-500">Loading audio…</div>}
           >
             <AudioSettings />
+          </Suspense>
+
+          {/* Reads the OAuth outcome out of the query string, so it needs the
+              same Suspense boundary. */}
+          <Suspense
+            fallback={<div className="text-xs text-ink-500">Loading calendar…</div>}
+          >
+            <CalendarSettings />
           </Suspense>
 
           <VoicemailSettings />

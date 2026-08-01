@@ -5,12 +5,13 @@ import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/cn';
 
-/// The app has exactly four top-level destinations. Lead import is a modal on
-/// the Dialer page and contact detail is a slide-over — neither gets a nav
+/// Top-level destinations, in the order §7 fixes them. Lead import is a modal
+/// on the Dialer page and contact detail is a slide-over — neither gets a nav
 /// entry, and nothing else should be added here.
 const NAV = [
   { href: '/dialer', label: 'Dialer', icon: PhoneIcon },
   { href: '/conversations', label: 'Conversations', icon: InboxIcon },
+  { href: '/calendar', label: 'Calendar', icon: CalendarIcon },
   { href: '/automations', label: 'Automations', icon: BoltIcon },
   { href: '/settings', label: 'Settings', icon: GearIcon },
 ] as const;
@@ -83,6 +84,15 @@ function InboxIcon({ className }: { className?: string }) {
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
       <path d="M22 12h-6l-2 3h-4l-2-3H2" />
       <path d="M5.5 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.1Z" />
+    </svg>
+  );
+}
+
+function CalendarIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="17" rx="2" />
+      <path d="M3 10h18M8 2v4M16 2v4" />
     </svg>
   );
 }
