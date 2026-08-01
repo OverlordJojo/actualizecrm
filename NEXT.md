@@ -7,27 +7,32 @@ file is only "what is done, what is left, and what to watch out for".
 
 | Thing | Where | State |
 | --- | --- | --- |
-| Web app | https://actualizecrm.vercel.app | deployed, **needs a redeploy** — see below |
-| Worker | https://worker-production-8c19.up.railway.app/health | `ok`, but running **old code** |
+| Web app | https://actualizecrm.vercel.app | deployed and **gated** — sign-in required |
+| Worker | https://worker-production-8c19.up.railway.app/health | `ok`, current code, drain running |
 | Database | Railway Postgres (public URL locally, internal on Railway) | migrated through `20260801020000_inbound_routing` |
 | Redis | Railway | BullMQ queue |
 | Object storage | Cloudflare R2, bucket `actualizecrm` | read + write verified |
 | Repo | github.com/OverlordJojo/actualizecrm | private |
 
-## Deploy before anything else
+## Deployment state
 
-Nothing built in this session is deployed yet. Both services need it, and the
-worker needs new variables:
+Both services are deployed and configured.
 
-- **Railway (worker)** — add `TELNYX_API_KEY`, `TELNYX_CONNECTION_ID`,
-  `APP_URL=https://actualizecrm.vercel.app`, and the SMTP block
-  (`SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS`). Without SMTP on
-  Railway, email automations queue and then fail — Settings → Email says so
-  explicitly, but only after a send has already failed.
-- **Vercel (web)** — add `AUTH_USERNAME`, `AUTH_PASSWORD_HASH`, `AUTH_SECRET`
-  and `WORKER_URL`, then redeploy. **Vercel bakes env vars at build time**, so
-  setting them does nothing until a build runs: `vercel redeploy <url>`.
-  Until this happens the deployed app has **no sign-in gate**.
+- **Railway (worker)** — `TELNYX_API_KEY`, `TELNYX_CONNECTION_ID`,
+  `TELNYX_MESSAGING_PROFILE`, `APP_URL`, the SMTP block and `RESEND_API_KEY`
+  are set. Verified live: `jobs.drain` ticks every 20s and
+  `calendar.reconcile` fired on schedule **without writing a claim row**, which
+  is the repeatable bug staying fixed in production.
+- **Vercel (web)** — `AUTH_USERNAME`, `AUTH_PASSWORD_HASH`, `AUTH_SECRET` and
+  `WORKER_URL` are set. 16/16 production checks: every page redirects to
+  `/login`, every API answers 401, the Telnyx webhook is still reachable, the
+  session cookie is HttpOnly **and** Secure, and `/api/sms/send` refuses a
+  well-formed body with 403.
+
+**Vercel does not auto-deploy from the GitHub push** — it had not built in five
+hours despite commits landing. Deploy explicitly with
+`npx vercel deploy --prod --yes --token=$VERCEL_TOKEN`, and remember env vars
+are baked at build time.
 
 ## Done and tested
 
@@ -59,6 +64,10 @@ worker needs new variables:
   9/9 checks on the server path.
 - **§3.1 — dialer card** — every field an inline input, 500ms debounce, saved
   indicator, errors surfaced without discarding what was typed.
+- **§2 Calendar** — Google OAuth with an AES-256-GCM encrypted refresh token,
+  calendar picker, month/week/day views, trigram lead picker that includes
+  removed leads, the §2.4 booking format, and a real `calendar.reconcile`.
+  12/12 checks plus timezone arithmetic verified over 400 consecutive days.
 
 ## Two bugs found and fixed this session
 
@@ -79,7 +88,6 @@ stale-claim recovery.
 
 | Section | Notes |
 | --- | --- |
-| **§2 Calendar** | Google OAuth creds are in `.env.local`. `Booking` model exists, `calendar.reconcile` is still a no-op. Needs: OAuth routes, encrypted refresh token, calendar page, trigram lead picker (indexes are migrated), §2.4 booking format, reconcile body. The Active Lead Card already accepts a `bookingPanel` slot for this. |
 | **§7 Analytics UI** | `DailyMetrics` and the nightly rollup work. Only the page is missing. |
 | **§5.6 Voice AI UI** | Suggestion chips, stage-suggestion pulse, live transcript pane, transcription settings. `/api/ai/suggestions` GET and POST are done. |
 | **Add-on C** | Daily brief email. `daily.brief` is scheduled every 5 minutes and returns "not yet implemented" — it needs to check the configured send time and exit early otherwise. |
@@ -100,6 +108,9 @@ absolute, and sending real email needs the operator's say-so.
    whole path is untested against a live SMTP server.
 5. **An inbound call to +1 702 745 8779** — confirm the browser rings, the
    slide-over pops, and Answer/Decline work.
+6. **Connect Google Calendar** in Settings → Calendar and make one booking.
+   Signing into a Google account is yours to do, not something to automate.
+   Everything up to the consent screen is tested; the event write is not.
 
 ## Traps already paid for
 
@@ -127,6 +138,11 @@ Each of these cost real time. They are also in `CLAUDE.md`.
   `onEnded` twice and silently skips a lead per call.
 - **`/connections/{id}` is read-only.** Updating needs the type-specific path.
 - **DND / iOS "Silence Unknown Callers"** send test calls straight to voicemail.
+- **This runtime's tzdata has `America/Vancouver` on permanent PDT from
+  8 March 2026.** Not a bug and not something the app decides — everything
+  resolves through `OPERATOR_TIMEZONE` and stays internally consistent — but do
+  not write a test that assumes two DST transitions a year. Assert that the
+  helpers agree with tzdata, not what tzdata ought to say.
 
 ## Test harnesses
 
