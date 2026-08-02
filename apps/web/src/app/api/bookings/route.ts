@@ -1,7 +1,12 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { db } from '@/lib/db';
-import { createEvent, connection } from '@/integrations/calendar/google';
+import {
+  createEvent,
+  connection,
+  isAuthFailure,
+  noteTokenRejected,
+} from '@/integrations/calendar/google';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -104,6 +109,19 @@ export async function POST(request: Request) {
       transcript: lastCall?.transcript,
     });
   } catch (err) {
+    if (isAuthFailure(err)) {
+      await noteTokenRejected(
+        'Google rejected the saved authorisation while creating a booking.',
+      );
+      return NextResponse.json(
+        {
+          error:
+            'Google no longer accepts the saved calendar authorisation. Reconnect in Settings → Calendar.',
+          needsReconnect: true,
+        },
+        { status: 409 },
+      );
+    }
     return NextResponse.json(
       { error: `Google refused the booking: ${String(err).slice(0, 200)}` },
       { status: 502 },

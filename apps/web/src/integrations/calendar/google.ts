@@ -24,6 +24,9 @@ const KEY = {
   calendarName: 'calendar.selectedCalendarName',
   account: 'calendar.accountEmail',
   connectedAt: 'calendar.connectedAt',
+  /// Set when Google rejects our refresh token. See `noteTokenRejected`.
+  invalidAt: 'calendar.tokenInvalidAt',
+  invalidReason: 'calendar.tokenInvalidReason',
 } as const;
 
 const SCOPES = ['https://www.googleapis.com/auth/calendar.events'];
@@ -88,6 +91,8 @@ export async function exchangeCode(
     upsert(KEY.account, email ?? ''),
     upsert(KEY.connectedAt, new Date().toISOString()),
   ]);
+  // A fresh grant clears any previous rejection.
+  await clearTokenRejection();
 
   return { email };
 }
@@ -135,18 +140,64 @@ export interface Connection {
   calendarName: string;
   connectedAt: string;
   timezone: string;
+  /// True when a token exists but Google has stopped accepting it. The
+  /// difference matters: "not connected" means connect, "needs reconnect"
+  /// means something revoked or expired what you already had.
+  needsReconnect: boolean;
+  reconnectReason: string;
+}
+
+/**
+ * Records that Google rejected our refresh token.
+ *
+ * The failure mode this exists for: an OAuth app left in **Testing** publishing
+ * status has its refresh tokens expired by Google after seven days. Bookings
+ * then fail silently a week after everything looked fine, which is exactly the
+ * kind of quiet breakage that gets discovered by a prospect not receiving an
+ * invite. Recording it turns that into a visible "reconnect" state.
+ */
+export async function noteTokenRejected(reason: string): Promise<void> {
+  await db.$transaction([
+    upsert(KEY.invalidAt, new Date().toISOString()),
+    upsert(KEY.invalidReason, reason.slice(0, 300)),
+  ]).catch(() => {});
+}
+
+async function clearTokenRejection(): Promise<void> {
+  await db.setting
+    .deleteMany({ where: { key: { in: [KEY.invalidAt, KEY.invalidReason] } } })
+    .catch(() => {});
+}
+
+/// Google reports both an expired and a revoked grant as `invalid_grant`.
+export function isAuthFailure(err: unknown): boolean {
+  const text = String(
+    (err as { response?: { data?: unknown } })?.response?.data ??
+      (err as Error)?.message ??
+      err,
+  ).toLowerCase();
+  return (
+    text.includes('invalid_grant') ||
+    text.includes('token has been expired or revoked') ||
+    text.includes('unauthorized_client')
+  );
 }
 
 export async function connection(): Promise<Connection> {
-  const [token, account, calendarId, calendarName, connectedAt] = await Promise.all([
-    readSetting(KEY.refreshToken),
-    readSetting(KEY.account),
-    readSetting(KEY.calendarId),
-    readSetting(KEY.calendarName),
-    readSetting(KEY.connectedAt),
-  ]);
+  const [token, account, calendarId, calendarName, connectedAt, invalidAt, invalidReason] =
+    await Promise.all([
+      readSetting(KEY.refreshToken),
+      readSetting(KEY.account),
+      readSetting(KEY.calendarId),
+      readSetting(KEY.calendarName),
+      readSetting(KEY.connectedAt),
+      readSetting(KEY.invalidAt),
+      readSetting(KEY.invalidReason),
+    ]);
 
   return {
+    needsReconnect: Boolean(token && invalidAt),
+    reconnectReason: invalidReason,
     connected: Boolean(token),
     configured: isConfigured(),
     accountEmail: account,
@@ -172,7 +223,18 @@ export async function listCalendars(): Promise<
   const cal = await client();
   if (!cal) return [];
 
-  const res = await cal.calendarList.list({ maxResults: 100 });
+  let res;
+  try {
+    res = await cal.calendarList.list({ maxResults: 100 });
+    await clearTokenRejection();
+  } catch (err) {
+    if (isAuthFailure(err)) {
+      await noteTokenRejected(
+        'Google rejected the saved authorisation. If the OAuth app is still in Testing, Google expires refresh tokens after seven days.',
+      );
+    }
+    throw err;
+  }
   return (res.data.items ?? [])
     // Only calendars we can actually create events on; a read-only subscribed
     // calendar in the list would just fail at booking time.
@@ -279,6 +341,7 @@ export async function createEvent(input: CreateEventInput): Promise<CreatedEvent
   });
 
   if (!res.data.id) throw new Error('Google did not return an event id.');
+  await clearTokenRejection();
 
   return {
     googleEventId: res.data.id,

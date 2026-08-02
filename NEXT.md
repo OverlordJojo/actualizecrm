@@ -84,6 +84,9 @@ are baked at build time.
 - **§5.6 complete** — suggestion chips, booking proposals, the live transcript
   pane (Telnyx streams during the call; Deepgram replaces it afterwards), and
   the pulsing stage outline with a permanent manual-choice lockout. 9/9 checks.
+- **Build step 10 — Custom fields** — add, rename, reorder, choose which show
+  on the Active Lead Card. Deleting a definition leaves the values on the
+  leads. 7/7 checks.
 - **§4 Multi-line** — bursts of up to 3 legs, each from a different owned
   number with premium AMD; machines/faxes/IVRs disposed of silently; the first
   human transferred to the softphone; every additional human held behind an
@@ -109,9 +112,9 @@ stale-claim recovery.
 
 ## Not built
 
-| Section | Notes |
-| --- | --- |
-| **Custom Fields settings** | Custom fields are created during import and render on the Active Lead Card; there is no dedicated Settings section to add or reorder them outside an import. Pipelines and stages are managed from the kanban, which is where they are used. |
+Nothing from the original spec is outstanding. Pipelines and stages are managed
+from the kanban rather than a Settings section, which is where they are used and
+where the operator already edits them.
 
 ## Waiting on a human
 
@@ -140,6 +143,27 @@ absolute, and sending real email needs the operator's say-so.
    rather than dialing anyone new. Then let one sit past the hold limit and
    confirm it hangs up with the apology and lands in the abandoned CSV. This is
    the one piece of §4 that only proves out against real simultaneous calls.
+
+## The Google OAuth consent screen
+
+If connecting the calendar reports *"has not completed the Google verification
+process… can only be accessed by developer-approved testers"*, the OAuth app is
+in **Testing** publishing status. Two fixes, and the second is the one that
+lasts:
+
+1. **Add yourself as a test user** — Google Cloud console → APIs & Services →
+   OAuth consent screen → Test users → Add. Works immediately, but **Google
+   expires refresh tokens after seven days** for apps in Testing, so the
+   calendar silently breaks once a week.
+2. **Publish the app** — same screen → *Publish app* → status becomes
+   *In production*. Verification is only required to remove the "Google hasn't
+   verified this app" interstitial, which the sole operator clicks through once
+   via **Advanced → Go to actualizecrm.vercel.app**. Refresh tokens then stop
+   expiring. This is the right answer for a single-operator app.
+
+The app now notices when Google rejects the stored grant and shows a
+**reconnect** state in Settings → Calendar rather than continuing to claim it
+is connected — that silent weekly failure is exactly what option 1 causes.
 
 ## Traps already paid for
 

@@ -9,6 +9,7 @@ import { MessagingSettings } from '@/components/settings/MessagingSettings';
 import { CalendarSettings } from '@/components/settings/CalendarSettings';
 import { DialerSettings } from '@/components/settings/DialerSettings';
 import { DataSettings } from '@/components/settings/DataSettings';
+import { CustomFieldsSettings } from '@/components/settings/CustomFieldsSettings';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,6 +48,8 @@ export default function SettingsPage() {
           <TemplatesSettings />
 
           <DialerSettings />
+
+          <CustomFieldsSettings />
 
           <DataSettings />
         </div>

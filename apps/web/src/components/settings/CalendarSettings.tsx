@@ -12,6 +12,8 @@ interface Connection {
   calendarName: string;
   connectedAt: string;
   timezone: string;
+  needsReconnect: boolean;
+  reconnectReason: string;
 }
 
 export function CalendarSettings() {
@@ -119,10 +121,37 @@ export function CalendarSettings() {
           </div>
         )}
 
+        {conn?.needsReconnect && (
+          <div className="mb-3 rounded-lg border border-amber-800 bg-amber-950/50 p-3">
+            <p className="text-xs font-semibold text-amber-200">
+              Google has stopped accepting this connection.
+            </p>
+            <p className="mt-1 text-[11px] leading-relaxed text-amber-100/90">
+              {conn.reconnectReason} Bookings and the 15-minute sync will fail
+              until you reconnect.
+            </p>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-amber-100/80">
+              If this keeps happening every week, the cause is the OAuth app&rsquo;s
+              publishing status. Google expires refresh tokens after{' '}
+              <strong>seven days</strong> while an app is in{' '}
+              <strong>Testing</strong>. Setting it to <strong>In production</strong>{' '}
+              in the Google Cloud console stops that, even without completing
+              verification.
+            </p>
+            <a className="btn-primary mt-2 inline-block py-1.5 text-xs" href="/api/calendar/connect">
+              Reconnect Google Calendar
+            </a>
+          </div>
+        )}
+
         {conn?.connected && (
           <div className="space-y-2">
             <div className="flex items-center gap-2 text-xs">
-              <span className="h-2 w-2 rounded-full bg-green-500" />
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  conn.needsReconnect ? 'bg-amber-500' : 'bg-green-500'
+                }`}
+              />
               <span className="text-ink-200">
                 {conn.accountEmail || 'Connected'}
               </span>

@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { getEvent, connection } from '@/integrations/calendar/google';
+import {
+  getEvent,
+  connection,
+  isAuthFailure,
+  noteTokenRejected,
+} from '@/integrations/calendar/google';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -115,6 +120,19 @@ export async function POST(request: Request) {
         });
       }
     } catch (err) {
+      // A rejected token will reject every remaining booking too, so stop and
+      // say so once rather than logging the same failure two hundred times.
+      if (isAuthFailure(err)) {
+        await noteTokenRejected(
+          'Google rejected the saved authorisation during the 15-minute reconcile.',
+        );
+        return NextResponse.json({
+          checked,
+          moved,
+          cancelled,
+          stopped: 'authorisation rejected — reconnect in Settings → Calendar',
+        });
+      }
       // One bad event must not abandon the rest of the window.
       errors.push(`${booking.id}: ${String(err).slice(0, 120)}`);
     }
