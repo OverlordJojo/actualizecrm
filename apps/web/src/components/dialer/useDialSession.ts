@@ -69,6 +69,12 @@ export function useDialSession({
   });
 
   const callIdRef = useRef<string | null>(null);
+  /// Mirrored into state so the live transcript pane can poll for it.
+  const [activeCallId, setActiveCallId] = useState<string | null>(null);
+  /// Stage the AI is suggesting for the lead on screen, and whether the
+  /// operator has overridden it (§5.6).
+  const [suggestedStageId, setSuggestedStageId] = useState<string | null>(null);
+  const [stageLocked, setStageLocked] = useState(false);
   const advanceTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   /// Consecutive zero-second "busy" results — see the note where this is read.
   const instantBusyRef = useRef(0);
@@ -226,6 +232,7 @@ export function useDialSession({
         if (!res.ok) throw new Error(json.error ?? 'Could not start that call.');
 
         callIdRef.current = json.callId;
+        setActiveCallId(json.callId);
         setCallerId(json.from);
         setStats((s) => ({
           ...s,
@@ -263,6 +270,7 @@ export function useDialSession({
         if (!res.ok) throw new Error(json.error ?? 'Could not dial that number.');
 
         callIdRef.current = json.callId;
+        setActiveCallId(json.callId);
         setCallerId(json.from);
         setActiveLead({
           id: json.contactId,
@@ -455,6 +463,85 @@ export function useDialSession({
   );
 
   /**
+   * Watches for a stage the AI wants this lead moved to (§5.6).
+   *
+   * The operator's own choice always wins and permanently locks out further
+   * suggestions for this call — a model that keeps re-suggesting a column the
+   * operator has already rejected is worse than one that says nothing.
+   */
+  useEffect(() => {
+    const contactId = activeLead?.id;
+    if (!contactId) {
+      setSuggestedStageId(null);
+      setStageLocked(false);
+      return;
+    }
+
+    setStageLocked(false);
+    setSuggestedStageId(null);
+    let cancelled = false;
+
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const res = await fetch(`/api/ai/suggestions?contactId=${contactId}`);
+        if (!res.ok || cancelled) return;
+        const rows: { fieldType: string; value: string | null }[] = await res.json();
+        const stage = rows.find((r) => r.fieldType === 'stage');
+        if (!stage?.value) return;
+
+        // The model names a stage; resolve it to a column on the board.
+        const stages = await fetch('/api/stages').then((r) => r.json());
+        const match = (stages as { id: string; name: string }[]).find(
+          (st) => st.name.toLowerCase() === stage.value!.toLowerCase(),
+        );
+        if (match && !cancelled) setSuggestedStageId(match.id);
+      } catch {
+        // A missed poll just means the outline appears a few seconds later.
+      }
+    };
+
+    tick();
+    const t = setInterval(tick, 6000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [activeLead?.id]);
+
+  /**
+   * The operator moved the lead themselves. That decision is final for this
+   * call: the outline goes away and any pending stage suggestions are marked
+   * decided so they cannot come back.
+   */
+  const lockStageChoice = useCallback(async () => {
+    setStageLocked(true);
+    setSuggestedStageId(null);
+
+    const contactId = activeLead?.id;
+    if (!contactId) return;
+    try {
+      const rows: { id: string; fieldType: string }[] = await fetch(
+        `/api/ai/suggestions?contactId=${contactId}`,
+      ).then((r) => r.json());
+      await Promise.all(
+        rows
+          .filter((r) => r.fieldType === 'stage')
+          .map((r) =>
+            fetch('/api/ai/suggestions', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ suggestionId: r.id, decision: 'dismissed' }),
+            }),
+          ),
+      );
+    } catch {
+      // The lockout is already in effect locally; the record catching up
+      // matters less than the outline going away immediately.
+    }
+  }, [activeLead?.id]);
+
+  /**
    * Voicemail drop — hotkey V (build step 6).
    *
    * Telnyx plays the recording into the call and hangs up when the audio
@@ -609,6 +696,10 @@ export function useDialSession({
     sessionActive,
     activeLead,
     callerId,
+    activeCallId,
+    suggestedStageId: stageLocked ? null : suggestedStageId,
+    stageLocked,
+    lockStageChoice,
     incoming: phone.incoming,
     burstActive,
     held,

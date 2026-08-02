@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import {
   startRecording,
+  startTranscription,
   playAudio,
   hangup,
   encodeClientState,
@@ -127,6 +128,16 @@ export async function POST(request: Request) {
             startRecording(callControlId).catch((e) =>
               console.error('[telnyx] record_start failed', e),
             );
+
+            // Live transcription is a *different* thing from the recording:
+            // Deepgram on the finished audio produces the accurate transcript,
+            // while this streams rough text back during the call so the
+            // operator can see what was just said. Both are best-effort.
+            if (await transcriptionEnabled()) {
+              startTranscription(callControlId).catch((e) =>
+                console.error('[telnyx] transcription_start failed', e),
+              );
+            }
           }
         }
         break;
@@ -240,6 +251,35 @@ export async function POST(request: Request) {
         break;
       }
 
+      // A phrase was transcribed mid-call. Appended as it arrives so the pane
+      // beside the Active Lead Card fills in while the operator is talking.
+      case 'call.transcription': {
+        if (call) {
+          const t = (p as unknown as {
+            transcription_data?: {
+              transcript?: string;
+              confidence?: number;
+              is_final?: boolean;
+              track?: string;
+            };
+          }).transcription_data;
+
+          // Interim results are re-sent and revised; storing them would make
+          // the pane stutter and duplicate lines.
+          if (t?.transcript && t.is_final !== false) {
+            await appendLiveSegment(call.id, {
+              // `inbound` on an outbound call is the prospect's audio — that is
+              // the side the operator most needs to read back.
+              speaker: t.track === 'inbound' ? 'Prospect' : 'You',
+              text: t.transcript,
+              confidence: t.confidence ?? null,
+              at: new Date().toISOString(),
+            });
+          }
+        }
+        break;
+      }
+
       // The identification prompt has finished playing to a queued owner, so
       // hold music starts. Silence is what makes people hang up.
       case 'call.speak.ended': {
@@ -331,6 +371,54 @@ async function findCall(callControlId: string, to?: string, hintCallId?: string)
   return db.call.update({
     where: { id: candidate.id },
     data: { callControlId },
+  });
+}
+
+/// Transcription is a setting, not an assumption — recording someone is a
+/// choice the operator makes once and should be able to unmake.
+async function transcriptionEnabled(): Promise<boolean> {
+  const row = await db.setting.findUnique({
+    where: { key: 'transcription.enabled' },
+  });
+  return row?.value !== 'false';
+}
+
+interface LiveSegment {
+  speaker: string;
+  text: string;
+  confidence: number | null;
+  at: string;
+}
+
+/**
+ * Appends one phrase to the call's running transcript.
+ *
+ * Read-modify-write on a Json column, which is safe here because Telnyx
+ * delivers a call's transcription events in order on one leg. The post-call
+ * Deepgram pass overwrites this wholesale with the accurate, speaker-attributed
+ * version — this is the rough live copy, and it says so in the UI.
+ */
+async function appendLiveSegment(callId: string, segment: LiveSegment): Promise<void> {
+  const call = await db.call.findUnique({
+    where: { id: callId },
+    select: { transcriptSegments: true, transcript: true, transcriptStatus: true },
+  });
+  if (!call) return;
+
+  const existing = Array.isArray(call.transcriptSegments)
+    ? (call.transcriptSegments as unknown as LiveSegment[])
+    : [];
+
+  // Bounded: a long call must not grow one row without limit.
+  const segments = [...existing, segment].slice(-400);
+
+  await db.call.update({
+    where: { id: callId },
+    data: {
+      transcriptSegments: segments as never,
+      transcript: segments.map((s) => `${s.speaker}: ${s.text}`).join('\n'),
+      transcriptStatus: call.transcriptStatus === 'done' ? 'done' : 'running',
+    },
   });
 }
 

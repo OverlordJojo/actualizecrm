@@ -23,6 +23,7 @@ export function StageColumn({
   color,
   leads,
   onCallLeadId,
+  aiSuggested,
   showDealValue,
   editable,
   onRename,
@@ -34,6 +35,10 @@ export function StageColumn({
   color: string;
   leads: BoardLead[];
   onCallLeadId?: string | null;
+  /// The AI is proposing the lead on the call belongs here (§5.6). Drawn as a
+  /// pulsing outline rather than moving anything — the operator decides, and
+  /// their choice locks further suggestions out for the call.
+  aiSuggested?: boolean;
   showDealValue: boolean;
   /// The Unassigned column is not a real stage, so it cannot be renamed or
   /// deleted.
@@ -63,7 +68,12 @@ export function StageColumn({
   }
 
   return (
-    <div className="flex h-full w-[236px] shrink-0 flex-col">
+    <div
+      className={cn(
+        'flex h-full w-[236px] shrink-0 flex-col rounded-xl',
+        aiSuggested && 'animate-pulse ring-2 ring-violet-500/70 ring-offset-2 ring-offset-ink-950',
+      )}
+    >
       <header className="mb-2 flex items-center gap-2 px-0.5">
         <span
           className="h-2.5 w-2.5 shrink-0 rounded-full"

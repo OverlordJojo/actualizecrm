@@ -67,7 +67,9 @@ export const SETTING_DEFAULTS = {
   'transcription.retentionDays': '30',
 
   // Multi-line dialing (§4)
-  'dialer.linesPerBurst': '1',
+  /// Range 1–3, default 3, hard cap 3. The governor clamps this downward on
+  /// its own when abandonment climbs; it is never raised past 3 by anything.
+  'dialer.linesPerBurst': '3',
   'dialer.holdMaxSeconds': '25',
   /// What a queued owner hears. Must identify the caller — that is a legal
   /// requirement on abandoned calls, not a nicety. Blank falls back to a

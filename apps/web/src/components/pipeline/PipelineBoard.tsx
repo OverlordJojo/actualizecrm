@@ -17,9 +17,16 @@ import { UNASSIGNED, type BoardData, type BoardLead, type BoardStage } from './t
 export function PipelineBoard({
   initial,
   onCallLeadId,
+  aiSuggestedStageId,
+  onManualStageChoice,
 }: {
   initial: BoardData;
   onCallLeadId?: string | null;
+  /// Column the AI wants the lead on the call moved to (§5.6).
+  aiSuggestedStageId?: string | null;
+  /// Called when the operator moves a lead themselves, which permanently ends
+  /// AI stage suggestions for this call.
+  onManualStageChoice?: () => void;
 }) {
   const [stages, setStages] = useState<BoardStage[]>(initial.stages);
   const [unassigned, setUnassigned] = useState<BoardLead[]>(initial.unassigned);
@@ -68,6 +75,10 @@ export function PipelineBoard({
   }
 
   async function handleDragEnd(event: DragEndEvent) {
+    // The operator moving a lead by hand is a decision. It ends AI stage
+    // suggestions for this call rather than letting the model keep proposing a
+    // column they have already rejected.
+    onManualStageChoice?.();
     const leadId = String(event.active.id);
     setDraggingId(null);
 
@@ -240,6 +251,7 @@ export function PipelineBoard({
             color="#434a59"
             leads={unassigned}
             onCallLeadId={onCallLeadId}
+            aiSuggested={false}
             showDealValue={showDealValue}
             editable={false}
           />
@@ -252,6 +264,7 @@ export function PipelineBoard({
               color={stage.color}
               leads={stage.leads}
               onCallLeadId={onCallLeadId}
+              aiSuggested={aiSuggestedStageId === stage.id}
               showDealValue={showDealValue}
               editable
               onRename={(name) => renameStage(stage.id, name)}

@@ -12,6 +12,7 @@ import {
 import { DialControls } from '@/components/dialer/DialControls';
 import { SuggestionChips } from '@/components/dialer/SuggestionChips';
 import { BookingPanel } from '@/components/dialer/BookingPanel';
+import { LiveTranscript } from '@/components/dialer/LiveTranscript';
 import { useCall, formatCallTimer } from '@/components/call/CallProvider';
 import type { BoardData } from '@/components/pipeline/types';
 
@@ -204,6 +205,10 @@ export function DialerClient({
             </>
           }
         />
+        <LiveTranscript
+          callId={call.activeCallId}
+          live={call.lineState === 'connected'}
+        />
         <DialControls
           lineState={call.lineState}
           muted={call.muted}
@@ -238,6 +243,8 @@ export function DialerClient({
           key={boardKey}
           initial={board}
           onCallLeadId={call.activeLead?.id ?? null}
+          aiSuggestedStageId={call.suggestedStageId}
+          onManualStageChoice={call.lockStageChoice}
         />
       ) : (
         <div className="flex flex-1 items-center justify-center text-sm text-ink-500">
