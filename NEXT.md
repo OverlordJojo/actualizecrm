@@ -81,6 +81,9 @@ are baked at build time.
   reduces the burst, 3% hard-blocks, no override, CSV export. 7/7 checks.
 - **Build step 10 — Settings** — Dialer, Voice AI, Transcription, Daily brief
   and Data (CSV export for all six tables). 4/4 checks.
+- **§5.6 complete** — suggestion chips, booking proposals, the live transcript
+  pane (Telnyx streams during the call; Deepgram replaces it afterwards), and
+  the pulsing stage outline with a permanent manual-choice lockout. 9/9 checks.
 - **§4 Multi-line** — bursts of up to 3 legs, each from a different owned
   number with premium AMD; machines/faxes/IVRs disposed of silently; the first
   human transferred to the softphone; every additional human held behind an
@@ -108,9 +111,7 @@ stale-claim recovery.
 
 | Section | Notes |
 | --- | --- |
-| **§5.6 stage-suggestion pulse** | The chips and booking proposals are in. The pulsing kanban outline that updates live as a call develops, and the manual-choice lockout, are not. |
-| **Live transcript pane** | The post-call transcript renders in the slide-over. The *live* pane beside the Active Lead Card during a call is not built. |
-| **Custom Fields / Pipelines & Stages settings** | Pipelines and stages are still managed from the kanban itself, which works; there is no dedicated Settings section. |
+| **Custom Fields settings** | Custom fields are created during import and render on the Active Lead Card; there is no dedicated Settings section to add or reorder them outside an import. Pipelines and stages are managed from the kanban, which is where they are used. |
 
 ## Waiting on a human
 
