@@ -13,6 +13,27 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  * sub-300ms music pause in integrations/audio achievable.
  */
 
+/**
+ * Reports what the softphone actually did, to the server.
+ *
+ * Temporary instrumentation for the operator-leg bug. The decisive half of that
+ * flow runs in a browser nobody can watch, and three different theories have now
+ * been indistinguishable from the server side — each one produced the same "leg
+ * rang, was never answered". Fire-and-forget so it can never affect a call.
+ */
+export function trace(event: string, detail?: unknown): void {
+  try {
+    void fetch('/api/dialer/trace', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event, detail }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch {
+    // Diagnostics must never break the thing they are diagnosing.
+  }
+}
+
 /// Operator-facing line state. Deliberately not SIP vocabulary.
 export type LineState =
   | 'offline'
@@ -116,10 +137,12 @@ async function getSharedClient(): Promise<any> {
      */
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      trace('mic.granted', { tracks: stream.getTracks().length });
       // Released immediately; the SDK opens its own when a call starts. Holding
       // it would leave the browser's recording indicator lit all day.
       stream.getTracks().forEach((t) => t.stop());
     } catch (err) {
+      trace('mic.denied', { message: String(err) });
       throw new Error(
         'The browser would not give this page a microphone, so it cannot ' +
           'register as a phone. Click the padlock in the address bar and allow ' +
@@ -206,6 +229,7 @@ export function useSoftphone(events: SoftphoneEvents = {}) {
     let client: any = null;
 
     const onReady = () => {
+      trace('telnyx.ready');
       if (!cancelled) {
         if (stuckTimerRef.current) clearTimeout(stuckTimerRef.current);
         setState('ready');
@@ -214,6 +238,7 @@ export function useSoftphone(events: SoftphoneEvents = {}) {
     };
 
     const onClientError = (e: any) => {
+      trace('telnyx.error', { message: e?.error?.message ?? e?.message ?? String(e) });
       if (cancelled) return;
       const message = e?.error?.message ?? e?.message ?? 'Phone error.';
       setError(message);
@@ -265,6 +290,12 @@ export function useSoftphone(events: SoftphoneEvents = {}) {
 
           const call = notification.call;
           callRef.current = call;
+          trace('callUpdate', {
+            state: call.state,
+            direction: call.direction,
+            id: call.id,
+            remote: call.options?.remoteCallerNumber,
+          });
 
           // Inbound legs arrive through the same notification stream as
           // outbound ones. Telling them apart matters for more than labelling:
@@ -419,7 +450,9 @@ export function useSoftphone(events: SoftphoneEvents = {}) {
     if (!call) return;
     try {
       call.answer({ remoteElement: ensureRemoteAudioElement() });
-    } catch {
+      trace('answer.called', { id: call.id, state: call.state });
+    } catch (err) {
+      trace('answer.threw', { message: String(err) });
       setError('Could not answer that call.');
     }
   }, []);
