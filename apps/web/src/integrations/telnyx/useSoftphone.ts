@@ -101,10 +101,50 @@ async function getSharedClient(): Promise<any> {
 
     ensureRemoteAudioElement();
 
+    /**
+     * Microphone access, before the SDK asks for it.
+     *
+     * The SDK needs a microphone to register, and if the browser refuses it the
+     * failure surfaces as nothing at all: no error event, no `telnyx.ready`,
+     * just a client that sits in `connecting` forever. Asking here turns the
+     * commonest cause of "not registered as a phone" into a sentence the
+     * operator can act on.
+     *
+     * Not fatal on failure — a blocked microphone still lets the socket
+     * register, and a dialer that reports the real reason beats one that
+     * refuses to start.
+     */
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Released immediately; the SDK opens its own when a call starts. Holding
+      // it would leave the browser's recording indicator lit all day.
+      stream.getTracks().forEach((t) => t.stop());
+    } catch (err) {
+      throw new Error(
+        'The browser would not give this page a microphone, so it cannot ' +
+          'register as a phone. Click the padlock in the address bar and allow ' +
+          'the microphone for this site, then reload.',
+      );
+    }
+
     const client = new TelnyxRTC({ login_token: json.token });
 
     sharedClient = client;
-    client.connect();
+
+    // `connect()` returns a promise, and an unhandled rejection here is
+    // invisible: the client never becomes ready, no error event fires, and the
+    // dialer reports "not registered" with nothing to explain it. This was the
+    // silent failure.
+    Promise.resolve(client.connect()).catch((err: unknown) => {
+      const message =
+        err instanceof Error ? err.message : 'The phone connection failed.';
+      console.error('[softphone] connect failed', err);
+      // Cast: the SDK's emitter is inherited but not on the public type.
+      (client as unknown as { emit?: (e: string, p: unknown) => void }).emit?.(
+        'telnyx.error',
+        { error: { message } },
+      );
+    });
 
     // A socket that closes for good must not leave a dead client cached, or
     // every later attempt silently reuses something that will never register
@@ -153,6 +193,8 @@ export function useSoftphone(events: SoftphoneEvents = {}) {
   const answeredAtRef = useRef<number | null>(null);
   /// Call ids already reported as ended — see the hangup/destroy case.
   const endedCallsRef = useRef<Set<string>>(new Set());
+  /// Cleared once registration completes; fires if it never does.
+  const stuckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Keep the latest callbacks without re-registering SDK listeners on every
   // parent render.
@@ -165,6 +207,7 @@ export function useSoftphone(events: SoftphoneEvents = {}) {
 
     const onReady = () => {
       if (!cancelled) {
+        if (stuckTimerRef.current) clearTimeout(stuckTimerRef.current);
         setState('ready');
         setError(null);
       }
@@ -190,6 +233,23 @@ export function useSoftphone(events: SoftphoneEvents = {}) {
         client = await getSharedClient();
         if (cancelled) return;
         clientRef.current = client;
+
+        // A registration that never completes is the failure with no symptom:
+        // no error, no ready, just a line that says Starting until somebody
+        // gives up. Say so rather than waiting silently.
+        const stuckTimer = setTimeout(() => {
+          if (cancelled) return;
+          setState((prev) => {
+            if (prev !== 'connecting') return prev;
+            const message =
+              'The phone did not finish registering. Reload the page, and if it ' +
+              'persists check that this site is allowed to use the microphone.';
+            setError(message);
+            eventsRef.current.onError?.(message);
+            return 'offline';
+          });
+        }, 20_000);
+        stuckTimerRef.current = stuckTimer;
 
         // The singleton may already be connected from a previous mount, in
         // which case `telnyx.ready` has long since fired.
