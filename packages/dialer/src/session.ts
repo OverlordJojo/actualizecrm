@@ -161,13 +161,11 @@ export async function onOperatorLegAnswered(
     name: `actualizecrm-${sessionId}`,
   });
 
-  await joinConference({
-    conferenceId: conference.id,
-    callControlId,
-    mute: true,
-    startConferenceOnEnter: true,
-  });
-
+  // Written down **before** anything else is attempted. Creating the conference
+  // is the step that cannot be repeated cleanly, so losing the id to a failure
+  // in a later call strands a live conference the app has no record of — which
+  // is exactly what happened: the join below threw, the id was never saved, and
+  // every retry then died on "already exists".
   await db.dialSession.update({
     where: { id: sessionId },
     data: {
@@ -176,6 +174,16 @@ export async function onOperatorLegAnswered(
       operatorLegId: callControlId,
       status: 'live',
     },
+  });
+
+  // No join. The creating leg is already the conference's first participant —
+  // joining it again is what broke this. Muting is a separate action, and
+  // best-effort: an unmuted operator between calls is untidy, not broken.
+  await muteParticipants({
+    conferenceId: conference.id,
+    callControlIds: [callControlId],
+  }).catch((err) => {
+    console.error('[dialer] could not mute the operator on join', err);
   });
 }
 

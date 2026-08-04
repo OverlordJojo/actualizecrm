@@ -57,7 +57,18 @@ export interface Conference {
 /**
  * Creates the session's conference around the operator's leg.
  *
- * `start_conference_on_create: false` matters. Left true, Telnyx starts the
+ * **The creating leg is already a participant.** Telnyx puts it in as the first
+ * one, so joining it afterwards is not just redundant — it errors, and that
+ * error is what stopped the dialer working: the join threw before the
+ * conference id had been written down, the job retried, and every retry hit
+ * "Conference with given name already exists and it's active" because the
+ * first attempt had in fact succeeded. A conference existed on Telnyx that the
+ * app had no record of, forever.
+ *
+ * So this is idempotent. If the name is taken, the existing conference is
+ * looked up and returned, which makes a retry harmless rather than fatal.
+ *
+ * `start_conference_on_create: false` matters too. Left true, Telnyx starts the
  * conference the instant it is made and the operator hears hold music into an
  * empty room for the whole session.
  */
@@ -65,21 +76,48 @@ export async function createConference(params: {
   callControlId: string;
   name: string;
 }): Promise<Conference> {
-  const json = await conferenceApi<{ data?: { id?: string; name?: string } }>(
-    '/conferences',
-    {
-      name: params.name,
-      call_control_id: params.callControlId,
-      start_conference_on_create: false,
-      // The operator hears silence between calls, not Telnyx's hold music —
-      // Spotify owns their ears between calls (§4).
-      hold_audio_url: undefined,
-    },
-  );
+  try {
+    const json = await conferenceApi<{ data?: { id?: string; name?: string } }>(
+      '/conferences',
+      {
+        name: params.name,
+        call_control_id: params.callControlId,
+        start_conference_on_create: false,
+      },
+    );
 
-  const id = json.data?.id;
-  if (!id) throw new Error('Telnyx created a conference without returning an id.');
-  return { id, name: json.data?.name ?? params.name };
+    const id = json.data?.id;
+    if (!id) throw new Error('Telnyx created a conference without returning an id.');
+    return { id, name: json.data?.name ?? params.name };
+  } catch (err) {
+    // Already exists — almost always this same session retrying after a failure
+    // later in the sequence. Adopt it rather than failing forever.
+    const existing = await findConferenceByName(params.name);
+    if (existing) return existing;
+    throw err;
+  }
+}
+
+/// Looks a conference up by the name we gave it, so a retry can adopt one that
+/// a previous attempt created.
+export async function findConferenceByName(name: string): Promise<Conference | null> {
+  const key = process.env.TELNYX_API_KEY;
+  if (!key) return null;
+
+  try {
+    const res = await fetch(
+      `${TELNYX_API}/conferences?filter[name]=${encodeURIComponent(name)}`,
+      { headers: { Authorization: `Bearer ${key}` }, ...NO_STORE },
+    );
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      data?: { id?: string; name?: string; status?: string }[];
+    };
+    const found = json.data?.find((c) => c.name === name && c.status !== 'completed');
+    return found?.id ? { id: found.id, name: found.name ?? name } : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
