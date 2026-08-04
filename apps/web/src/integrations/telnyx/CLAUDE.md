@@ -124,6 +124,15 @@ delivery" in the root `CLAUDE.md`.
 Prefer numbers in the area code you are dialing into — a local number gets
 noticeably higher answer rates than an out-of-state one.
 
+> **Buy through this page, not the Telnyx portal.** The dialer picks caller IDs
+> from the `PhoneNumber` table, not from Telnyx, so a number bought in the
+> portal is invisible to it — and a multi-line burst silently shrinks to
+> however many rows exist here, because it refuses to dial two legs from one
+> number. Symptom: you own three numbers and a three-line burst still opens one
+> leg. `npm run verify-telnyx` counts Telnyx's numbers, so it reads PASS while
+> the app disagrees; compare against Settings → Phone Numbers, which reads the
+> table. This has happened once already.
+
 ---
 
 ## What drives auto-advance — and why that is changing
