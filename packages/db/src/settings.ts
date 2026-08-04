@@ -19,6 +19,11 @@ export const SETTING_DEFAULTS = {
   'dialer.fixedCallerIdNumberId': '',
   'dialer.activePipelineId': '',
 
+  // Analytics
+  /// Seconds a human must stay on the line to count as the owner rather than
+  /// a gatekeeper who put the phone down (§6.2).
+  'analytics.ownerThresholdSeconds': '10',
+
   // Audio
   'audio.musicInsteadOfRinging': 'true',
   'audio.ringbackVolume': '0.5',

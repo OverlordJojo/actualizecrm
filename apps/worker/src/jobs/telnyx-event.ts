@@ -10,6 +10,7 @@ import {
   onOperatorLegAnswered,
   routeAmdVerdict,
   releaseActive,
+  finalizeAttribution,
   type SessionLegState,
 } from '@actualizecrm/dialer';
 import { relayToApp } from '../lib/app-relay';
@@ -305,10 +306,19 @@ async function handleSessionEvent(
           },
         });
       }
+      // Owner attribution, from stored facts only (§6.2). Deterministic and
+      // deliberately independent of the AI pipeline — these numbers must be
+      // identical with DEEPINFRA_API_KEY removed.
+      const attribution = await finalizeAttribution(callId);
+
       // Frees the active slot and re-mutes the operator. Idempotent, because
       // the operator pressing Hang up and this webhook both run it.
       await releaseActive(sessionId, callId);
-      return { handled: true, eventType, note: 'prospect leg ended' };
+      return {
+        handled: true,
+        eventType,
+        note: `prospect leg ended — ${attribution.reason}`,
+      };
     }
 
     default:
