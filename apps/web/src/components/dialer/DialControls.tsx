@@ -60,6 +60,7 @@ export function DialControls({
   incoming,
   onAnswerInbound,
   onDeclineInbound,
+  incomingIsOperatorLeg,
   held,
   governor,
   linesPerBurst,
@@ -78,6 +79,8 @@ export function DialControls({
   incoming: { callerNumber: string; callerName?: string } | null;
   onAnswerInbound: () => void;
   onDeclineInbound: () => void;
+  /// The ringing call is this session's own operator leg, not a prospect.
+  incomingIsOperatorLeg?: boolean;
   /// Queued owners waiting on hold (§4.3).
   held: { callId: string; toE164: string; heldSeconds: number }[];
   /// Live abandonment governor state (§4.4).
@@ -143,20 +146,49 @@ export function DialControls({
       {/* Inbound. Sits above everything because it is the only thing on this
           panel with a few seconds to act on. */}
       {incoming && (
-        <div className="rounded-lg border border-green-700 bg-green-950/50 px-3 py-2">
-          <p className="text-xs text-green-200">
-            Incoming call from{' '}
-            <span className="font-mono">{formatPhone(incoming.callerNumber)}</span>
-            {incoming.callerName ? ` — ${incoming.callerName}` : ''}
-          </p>
-          <div className="mt-1.5 flex gap-1.5">
-            <button className="btn-primary py-1 text-xs" onClick={onAnswerInbound}>
-              Answer
-            </button>
-            <button className="btn-ghost py-1 text-xs" onClick={onDeclineInbound}>
-              Decline
-            </button>
-          </div>
+        <div
+          className={cn(
+            'rounded-lg border px-3 py-2',
+            incomingIsOperatorLeg
+              ? 'border-brand-600 bg-brand-950/50'
+              : 'border-green-700 bg-green-950/50',
+          )}
+        >
+          {incomingIsOperatorLeg ? (
+            <>
+              {/* The operator's own number ringing them is confusing on its
+                  face — it is the dialer connecting their headset, not a
+                  prospect. Say which, or it reads as a bug. */}
+              <p className="text-xs font-medium text-brand-200">
+                Connecting your headset…
+              </p>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-brand-100/70">
+                This is the dialer calling you, not a prospect. It answers
+                itself — press Connect if it does not.
+              </p>
+              <div className="mt-1.5">
+                <button className="btn-primary py-1 text-xs" onClick={onAnswerInbound}>
+                  Connect
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-xs text-green-200">
+                Incoming call from{' '}
+                <span className="font-mono">{formatPhone(incoming.callerNumber)}</span>
+                {incoming.callerName ? ` — ${incoming.callerName}` : ''}
+              </p>
+              <div className="mt-1.5 flex gap-1.5">
+                <button className="btn-primary py-1 text-xs" onClick={onAnswerInbound}>
+                  Answer
+                </button>
+                <button className="btn-ghost py-1 text-xs" onClick={onDeclineInbound}>
+                  Decline
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
 

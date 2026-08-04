@@ -169,12 +169,30 @@ export function useDialSession({
 
   const phone = useSoftphone({
     onIncoming: async ({ callerNumber }) => {
-      // The session's operator leg arrives as an inbound invite. The operator
-      // already asked for this by starting the session, so making them press
-      // Answer would be a second decision about something they already decided.
+      // The session's operator leg arrives as an inbound invite, showing the
+      // operator's own Telnyx number as the caller. The operator already asked
+      // for this by starting the session, so making them press Answer would be
+      // a second decision about something they already decided.
       if (expectingOperatorLeg.current) {
-        expectingOperatorLeg.current = false;
-        phone.answer();
+        console.log('[dialer] operator leg ringing — answering');
+        // Retried rather than fired once. The SDK reports `ringing` the moment
+        // the invite lands, which can be marginally before the call object is
+        // ready to be answered; a single attempt that lands in that window
+        // fails silently and leaves the operator staring at their own number
+        // ringing them.
+        let answered = false;
+        for (let i = 0; i < 12 && !answered; i++) {
+          try {
+            phone.answer();
+            answered = true;
+          } catch {
+            await new Promise((r) => setTimeout(r, 250));
+          }
+        }
+        if (!answered) console.warn('[dialer] could not answer the operator leg');
+        // The flag is cleared only on success, so a failed attempt does not
+        // turn the retry below into an ordinary inbound call.
+        if (answered) expectingOperatorLeg.current = false;
         return;
       }
 
@@ -326,6 +344,38 @@ export function useDialSession({
     const t = setTimeout(() => setTrashToast(null), remaining);
     return () => clearTimeout(t);
   }, [trashToast]);
+
+  /**
+   * Safety net for the operator leg (§2.2 step 1).
+   *
+   * If the invite is still ringing shortly after it arrived, keep trying to
+   * answer it. Autoplay policy and SDK timing can both make the first attempt
+   * fail from inside a websocket callback, and the failure mode without this is
+   * the worst one available: the operator watches their own number ring them
+   * while the dialer does nothing.
+   */
+  useEffect(() => {
+    if (!phone.incoming || !expectingOperatorLeg.current) return;
+    const t = setInterval(() => {
+      if (!expectingOperatorLeg.current) return;
+      try {
+        phone.answer();
+      } catch {
+        // Next tick.
+      }
+    }, 700);
+    const stop = setTimeout(() => clearInterval(t), 8000);
+    return () => {
+      clearInterval(t);
+      clearTimeout(stop);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phone.incoming]);
+
+  // Once the browser is on the call, the leg is answered — stop expecting it.
+  useEffect(() => {
+    if (phone.state === 'connected') expectingOperatorLeg.current = false;
+  }, [phone.state]);
 
   // Poll while a session exists.
   useEffect(() => {
@@ -729,6 +779,10 @@ export function useDialSession({
     stageLocked,
     lockStageChoice,
     incoming: phone.incoming,
+    /// True when the ringing invite is this session's own operator leg rather
+    /// than a prospect calling in. The UI labels it accordingly — an operator
+    /// seeing their own number ring them has no way to know which it is.
+    incomingIsOperatorLeg: Boolean(phone.incoming) && expectingOperatorLeg.current,
     burstActive: (view?.ringing.length ?? 0) > 0,
     held: view?.held ?? [],
     governor,
