@@ -65,9 +65,40 @@ export async function GET() {
   const me = await res.json();
   const premium = me.product === 'premium';
 
+  /**
+   * Which device Spotify is actually routing audio to (§4.2).
+   *
+   * The load-bearing field for the "connected but silent" failure: registering
+   * a device does not route to it, and the only way to know the transfer landed
+   * is to read this back and compare. A 204 from the transfer call proves
+   * nothing.
+   *
+   * 204 with no body means nothing is playing anywhere, which is a legitimate
+   * state rather than an error — hence the tolerant parse.
+   */
+  let activeDeviceId: string | null = null;
+  let playbackState: string | null = null;
+  try {
+    const player = await fetch('https://api.spotify.com/v1/me/player', {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    });
+    if (player.ok && player.status !== 204) {
+      const p = await player.json();
+      activeDeviceId = p?.device?.id ?? null;
+      playbackState = p?.is_playing ? 'playing' : 'paused';
+    } else if (player.status === 204) {
+      playbackState = 'idle';
+    }
+  } catch {
+    // Leave both null rather than claiming a state we did not observe.
+  }
+
   return NextResponse.json({
     connected: true,
     premium,
+    activeDeviceId,
+    playbackState,
     displayName: me.display_name,
     problem: premium
       ? null

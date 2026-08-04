@@ -2,6 +2,7 @@ import { google, type calendar_v3 } from 'googleapis';
 import { OPERATOR_TIMEZONE } from '@actualizecrm/db';
 import { db } from '@/lib/db';
 import { encrypt, decrypt, isConfigured as cryptoConfigured } from './crypto';
+import { DEFAULT_BOOKING_MINUTES } from '@/lib/operator-time';
 
 /**
  * Google Calendar (§2).
@@ -407,7 +408,7 @@ export async function getEvent(
     // 404/410 means the operator deleted it in Google.
     const status = (err as { code?: number }).code;
     if (status === 404 || status === 410) {
-      return { status: 'cancelled', startsAt: null, durationMinutes: 30 };
+      return { status: 'cancelled', startsAt: null, durationMinutes: DEFAULT_BOOKING_MINUTES };
     }
     throw err;
   }

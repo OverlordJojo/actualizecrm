@@ -7,6 +7,7 @@ import {
   isAuthFailure,
   noteTokenRejected,
 } from '@/integrations/calendar/google';
+import { DEFAULT_BOOKING_MINUTES } from '@/lib/operator-time';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -51,7 +52,7 @@ const createSchema = z.object({
   /// ISO 8601. The client sends an absolute instant; the operator's timezone
   /// is applied when rendering, never re-guessed here.
   startsAt: z.string().min(1),
-  durationMinutes: z.number().int().min(5).max(480).default(30),
+  durationMinutes: z.number().int().min(5).max(480).default(DEFAULT_BOOKING_MINUTES),
   /// Set when the booking came from an accepted AI suggestion (§5.6).
   createdByAi: z.boolean().default(false),
 });

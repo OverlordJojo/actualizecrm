@@ -7,6 +7,7 @@ import {
   operatorZoneLabel,
   formatOperatorDateTime,
 } from '@/lib/operator-time';
+import { DEFAULT_BOOKING_MINUTES } from '@/lib/operator-time';
 
 /**
  * The booking panel on the Active Lead Card (§3.1, §2.4).
@@ -29,7 +30,7 @@ export function BookingPanel({
 }) {
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
-  const [duration, setDuration] = useState(30);
+  const [duration, setDuration] = useState(DEFAULT_BOOKING_MINUTES);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

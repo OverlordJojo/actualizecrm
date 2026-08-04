@@ -175,3 +175,15 @@ export function operatorZoneLabel(at = new Date(), tz = OPERATOR_TIMEZONE): stri
   }).formatToParts(at);
   return parts.find((p) => p.type === 'timeZoneName')?.value ?? tz;
 }
+
+/**
+ * Default length of a booked meeting, in minutes (§9.2).
+ *
+ * 45, not 30. A discovery call that is genuinely going somewhere does not fit
+ * in half an hour, and an operator who has to extend every booking by hand will
+ * eventually stop bothering and run over instead — which costs the next call.
+ *
+ * Applies to bookings made from the dialer, from the Calendar page, and to
+ * AI-proposed bookings where the prospect did not state a duration.
+ */
+export const DEFAULT_BOOKING_MINUTES = 45;

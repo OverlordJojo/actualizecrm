@@ -335,6 +335,10 @@ export function useDialSession({
     if (leads.length === 0) return;
 
     setError(null);
+    // The browser will not start audio without a user gesture, and this runs
+    // inside the Start-session click (§4.2). Initialising Spotify anywhere else
+    // leaves the AudioContext suspended and playback silently dead.
+    void ringAudio.initSpotify();
     indexRef.current = 0;
     setIndex(0);
     setStats({ dials: 0, connects: 0, booked: 0, talkTimeSec: 0, startedAt: Date.now() });
@@ -694,6 +698,8 @@ export function useDialSession({
     undoTrash,
     callControlId: phone.callControlId,
 
+    initSpotify: ringAudio.initSpotify,
+    spotifyDiagnostics: ringAudio.spotifyDiagnostics,
     spotifyReady: ringAudio.spotifyReady,
     spotifyProblem: ringAudio.spotifyProblem,
     silentFallback: ringAudio.silentFallback,

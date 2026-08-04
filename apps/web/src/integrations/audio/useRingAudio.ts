@@ -53,51 +53,73 @@ export function useRingAudio(config: RingAudioConfig) {
   }, [config.ringbackVolume]);
 
   // --- spotify -------------------------------------------------------------
-  useEffect(() => {
+
+  /**
+   * Starts the Spotify player. **Must be called from a click handler** (§4.2).
+   *
+   * Browsers refuse to start audio without a user gesture. This used to run in
+   * a mount effect, so the AudioContext stayed suspended and playback silently
+   * never began — connection succeeded, everything looked healthy, and no sound
+   * came out. "Start session" is the natural gesture and is where this is
+   * called from.
+   *
+   * Idempotent: a second session start reuses the player rather than opening a
+   * second one.
+   */
+  const initSpotify = useCallback(async () => {
     if (config.mode !== 'music') return;
+    if (spotifyRef.current) return;
 
-    let cancelled = false;
     const player = new SpotifyPlayer();
-    player.onError = (m) => {
-      if (!cancelled) setSpotifyProblem(m);
-    };
+    player.onError = (m) => setSpotifyProblem(m);
+    spotifyRef.current = player;
 
-    player
-      .init(config.playlistUri)
-      .then(() => {
-        if (cancelled) return;
-        spotifyRef.current = player;
-        // `ready` arrives asynchronously from the SDK.
-        const poll = setInterval(() => {
-          if (cancelled) return clearInterval(poll);
-          if (player.isReady) {
-            setSpotifyReady(true);
-            setSpotifyProblem(null);
-            clearInterval(poll);
-          }
-        }, 250);
-        setTimeout(() => clearInterval(poll), 15000);
-      })
-      .catch((e) => {
-        if (!cancelled) {
-          setSpotifyProblem(
-            e instanceof Error ? e.message : 'Could not start Spotify.',
-          );
+    try {
+      await player.init(config.playlistUri);
+      for (let i = 0; i < 60; i++) {
+        if (player.isReady) {
+          setSpotifyReady(true);
+          setSpotifyProblem(null);
+          return;
         }
-      });
-
-    return () => {
-      cancelled = true;
-      player.disconnect();
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      setSpotifyProblem('Spotify did not finish starting up.');
+    } catch (e) {
       spotifyRef.current = null;
-      setSpotifyReady(false);
-    };
+      setSpotifyProblem(
+        e instanceof Error ? e.message : 'Could not start Spotify.',
+      );
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.mode, config.playlistUri]);
+
+  // Tear down only on unmount or when music mode is switched off. Deliberately
+  // not keyed on anything that changes mid-session.
+  useEffect(() => {
+    if (config.mode === 'music') return;
+    spotifyRef.current?.disconnect();
+    spotifyRef.current = null;
+    setSpotifyReady(false);
   }, [config.mode]);
+
+  useEffect(
+    () => () => {
+      spotifyRef.current?.disconnect();
+      spotifyRef.current = null;
+    },
+    [],
+  );
 
   useEffect(() => {
     spotifyRef.current?.setPlaylist(config.playlistUri);
   }, [config.playlistUri]);
+
+  /// Live state for the Settings audio panel (§4.2).
+  const spotifyDiagnostics = useCallback(
+    () => spotifyRef.current?.diagnostics() ?? null,
+    [],
+  );
 
   // --- lifecycle hooks called by the dialer --------------------------------
 
@@ -149,6 +171,9 @@ export function useRingAudio(config: RingAudioConfig) {
     onEnded,
     onIdle,
     previewRingback,
+    /// Call from a click handler before the first call of a session (§4.2).
+    initSpotify,
+    spotifyDiagnostics,
     spotifyReady,
     spotifyProblem,
     /// True when music was asked for but cannot play, so the UI can say so.

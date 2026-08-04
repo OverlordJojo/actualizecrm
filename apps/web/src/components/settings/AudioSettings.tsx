@@ -8,6 +8,9 @@ import { RingbackTone } from '@/integrations/audio/ringback';
 interface SpotifyStatus {
   connected: boolean;
   premium: boolean;
+  /// Device Spotify is actually routing to, versus the one we registered.
+  activeDeviceId?: string | null;
+  playbackState?: string | null;
   displayName?: string;
   problem: string | null;
   playlistUri: string;
@@ -124,6 +127,31 @@ export function AudioSettings() {
   // symptom is simply silence.
   const degraded =
     musicMode && (!status?.connected || !status?.premium || !!status?.problem);
+
+
+  /**
+   * Audio diagnostics (§4.2).
+   *
+   * Every Spotify failure mode presents identically — silence — so each one is
+   * shown as an observed fact rather than left to be inferred. "Connected"
+   * covering a device that Spotify is not routing to is exactly how this
+   * appeared healthy while producing no sound.
+   */
+  const diagnostics = [
+    { label: 'Signed in', value: status?.connected ? 'yes' : 'no', ok: !!status?.connected },
+    { label: 'Premium', value: status?.premium ? 'yes' : 'no — required', ok: !!status?.premium },
+    {
+      label: 'Active device',
+      value: status?.activeDeviceId ? `${status.activeDeviceId.slice(0, 12)}…` : 'none',
+      ok: !!status?.activeDeviceId,
+    },
+    {
+      label: 'Playback',
+      value: status?.playbackState ?? 'unknown',
+      ok: status?.playbackState !== null && status?.playbackState !== undefined,
+    },
+    { label: 'Last error', value: status?.problem ?? 'none', ok: !status?.problem },
+  ];
 
   return (
     <section className="space-y-4">
@@ -298,6 +326,39 @@ export function AudioSettings() {
             Preview
           </button>
         </div>
+      </div>
+
+      {/* §4.2 — every Spotify failure sounds the same from the operator's
+          chair, so show what was actually observed rather than a single
+          "connected" that can be true while nothing plays. */}
+      <div className="rounded-lg border border-ink-800 bg-ink-900/60 px-3 py-2.5">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-medium text-ink-200">Audio diagnostics</p>
+          <button className="btn-ghost py-0.5 text-[11px]" onClick={loadStatus}>
+            Re-check
+          </button>
+        </div>
+        <dl className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1">
+          {diagnostics.map((d) => (
+            <div key={d.label} className="flex items-baseline justify-between gap-2">
+              <dt className="text-[11px] text-ink-500">{d.label}</dt>
+              <dd
+                className={
+                  d.ok
+                    ? 'truncate font-mono text-[11px] text-ink-300'
+                    : 'truncate font-mono text-[11px] text-amber-300'
+                }
+                title={String(d.value)}
+              >
+                {d.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+        <p className="mt-1.5 text-[10px] leading-relaxed text-ink-500">
+          Music starts when you press Start session — browsers refuse to play
+          audio until you click something, so connecting alone is not enough.
+        </p>
       </div>
     </section>
   );
