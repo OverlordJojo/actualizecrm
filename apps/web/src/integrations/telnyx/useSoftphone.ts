@@ -106,6 +106,19 @@ async function getSharedClient(): Promise<any> {
     sharedClient = client;
     client.connect();
 
+    // A socket that closes for good must not leave a dead client cached, or
+    // every later attempt silently reuses something that will never register
+    // and the dialer reports "not registered" forever with no way back short of
+    // a reload.
+    const forget = () => {
+      if (sharedClient === client) {
+        sharedClient = null;
+        sharedClientPromise = null;
+      }
+    };
+    client.on('telnyx.socket.close', forget);
+    client.on('telnyx.error', forget);
+
     if (typeof window !== 'undefined') {
       window.addEventListener('beforeunload', () => {
         try {

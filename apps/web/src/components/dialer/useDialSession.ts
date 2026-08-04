@@ -124,6 +124,8 @@ export function useDialSession({
   const [suggestedStageId, setSuggestedStageId] = useState<string | null>(null);
   const [stageLocked, setStageLocked] = useState(false);
   const [trashToast, setTrashToast] = useState<TrashToast | null>(null);
+  /// True while Start is waiting on the softphone to finish registering.
+  const [connectingPhone, setConnectingPhone] = useState(false);
 
   const sessionIdRef = useRef<string | null>(null);
   sessionIdRef.current = sessionId;
@@ -136,8 +138,26 @@ export function useDialSession({
   const expectingOperatorLeg = useRef(false);
   /// Guards against firing two advances for one call ending.
   const advancingRef = useRef(false);
+  /// Read inside async callbacks, which would otherwise close over the line
+  /// state as it was when the handler was created.
+  const phoneStateRef = useRef<LineState>('offline');
 
   const ringAudio = useRingAudio(audio);
+
+  /**
+   * Waits for the browser to finish registering as a phone.
+   *
+   * The SDK connects asynchronously and takes a few seconds from a cold page
+   * load. Fifteen seconds is generous for a websocket handshake and short
+   * enough that a genuinely dead registration is reported rather than hung on.
+   */
+  const waitForRegistration = useCallback(async (): Promise<boolean> => {
+    for (let i = 0; i < 60; i++) {
+      if (phoneStateRef.current === 'ready') return true;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    return phoneStateRef.current === 'ready';
+  }, []);
 
   const clearAdvance = useCallback(() => {
     if (advanceTimer.current) clearInterval(advanceTimer.current);
@@ -336,18 +356,26 @@ export function useDialSession({
     if (leads.length === 0) return;
 
     // The session is a call *to* this browser, so the browser has to be
-    // registered as a phone before there is anywhere to send it. Without this
-    // guard the leg originates, rings an address nobody is listening at, and
-    // the dialer sits there doing nothing with no way to tell why.
-    if (phone.state === 'offline' || phone.state === 'connecting') {
-      setError(
-        'The dialer is not registered as a phone yet, so there is nowhere to ' +
-          'connect calls to. Wait for the line to read Ready and try again.',
-      );
-      return;
+    // registered as a phone before there is anywhere to send it.
+    //
+    // Waited for, not refused. Registration takes a few seconds after a page
+    // load, which is exactly when somebody presses Start — telling them to come
+    // back later is making the operator do the computer's waiting.
+    setError(null);
+    if (phoneStateRef.current !== 'ready') {
+      setConnectingPhone(true);
+      const registered = await waitForRegistration();
+      setConnectingPhone(false);
+      if (!registered) {
+        setError(
+          'The dialer could not register as a phone, so there is nowhere to ' +
+            'connect calls to. Reload the page; if it keeps happening, check ' +
+            'that the browser has microphone permission for this site.',
+        );
+        return;
+      }
     }
 
-    setError(null);
     // The browser will not start audio without a user gesture, and this runs
     // inside the Start-session click (§4.2). Initialising Spotify anywhere else
     // leaves the AudioContext suspended and playback silently dead.
@@ -377,7 +405,7 @@ export function useDialSession({
       setError(e instanceof Error ? e.message : 'Could not start the session.');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phone.state]);
+  }, [waitForRegistration]);
 
   // A session that ends before its conference exists never started. Surface the
   // carrier's reason rather than leaving a dialer that silently did nothing.
@@ -658,6 +686,8 @@ export function useDialSession({
 
   // --- derived UI state -----------------------------------------------------
 
+  phoneStateRef.current = phone.state;
+
   const activeLead: ActiveLead | null = view?.active
     ? queueRef.current.find((l) => l.id === view.active!.contactId) ?? null
     : null;
@@ -685,6 +715,8 @@ export function useDialSession({
     clearError: () => setError(null),
 
     sessionActive: Boolean(sessionId) && view?.status !== 'ended',
+    /// Start pressed, waiting on registration. Distinct from a live session.
+    connectingPhone,
     sessionId,
     activeLead,
     ringingLeads,
