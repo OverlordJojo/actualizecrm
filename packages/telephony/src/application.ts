@@ -12,13 +12,22 @@ import { TELNYX_API, telnyxErrorDetail, NO_STORE } from './call-control';
  * every write below routes through `writePathFor()` rather than guessing.
  */
 
-/// The concrete Telnyx resources `/connections/{id}` can be a view over, mapped
-/// to the path that accepts a PATCH.
+/**
+ * The concrete Telnyx resources `/connections/{id}` can be a view over, mapped
+ * to the path that accepts a PATCH.
+ *
+ * Note the two spellings for one thing. A Call Control Application reports
+ * `record_type: "call_control_connection"` through the polymorphic view, but is
+ * written at `/call_control_applications` — Telnyx is inconsistent here, and
+ * mapping only the name that matches the URL means webhook registration fails
+ * on precisely the connection that dials.
+ */
 const WRITE_PATHS: Record<string, string> = {
   credential_connection: 'credential_connections',
   ip_connection: 'ip_connections',
   fqdn_connection: 'fqdn_connections',
   call_control_application: 'call_control_applications',
+  call_control_connection: 'call_control_applications',
 };
 
 export interface TelnyxConnection {
