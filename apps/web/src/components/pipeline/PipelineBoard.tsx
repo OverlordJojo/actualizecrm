@@ -9,16 +9,19 @@ import {
   useSensors,
   type DragEndEvent,
   type DragStartEvent,
+  type DragOverEvent,
 } from '@dnd-kit/core';
 import { LeadCard } from './LeadCard';
 import { StageColumn } from './StageColumn';
-import { UNASSIGNED, type BoardData, type BoardLead, type BoardStage } from './types';
+import { TRASH_ZONE_ID, type BoardData, type BoardLead, type BoardStage } from './types';
+import { TrashZone } from '@/components/dialer/TrashToast';
 
 export function PipelineBoard({
   initial,
   onCallLeadId,
   aiSuggestedStageId,
   onManualStageChoice,
+  onTrashed,
 }: {
   initial: BoardData;
   onCallLeadId?: string | null;
@@ -27,12 +30,16 @@ export function PipelineBoard({
   /// Called when the operator moves a lead themselves, which permanently ends
   /// AI stage suggestions for this call.
   onManualStageChoice?: () => void;
+  /// Fired when a lead is dragged to the trash, so the page can show the
+  /// ten-second Undo (§3.3).
+  onTrashed?: (info: { contactId: string; name: string; stageId: string | null }) => void;
 }) {
   const [stages, setStages] = useState<BoardStage[]>(initial.stages);
   const [unassigned, setUnassigned] = useState<BoardLead[]>(initial.unassigned);
   const [pipelines, setPipelines] = useState(initial.pipelines);
   const [activeId, setActiveId] = useState(initial.activePipelineId);
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [overTrash, setOverTrash] = useState(false);
   const [showDealValue, setShowDealValue] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -74,6 +81,51 @@ export function PipelineBoard({
     setDraggingId(String(event.active.id));
   }
 
+  function handleDragOver(event: DragOverEvent) {
+    setOverTrash(event.over ? String(event.over.id) === TRASH_ZONE_ID : false);
+  }
+
+  /**
+   * Dropping on the trash removes the lead from the pipeline (§3.3).
+   *
+   * Removed, not deleted: the contact and its entire conversation history stay
+   * searchable forever, and the ten-second Undo restores the exact column it
+   * came from. That is why the previous stage is captured before the optimistic
+   * update rather than read back afterwards.
+   */
+  async function trashLead(leadId: string) {
+    const fromStage = stages.find((s) => s.leads.some((l) => l.id === leadId));
+    const lead = fromStage?.leads.find((l) => l.id === leadId);
+    if (!lead) return;
+
+    setStages((prev) =>
+      prev.map((s) =>
+        s.id === fromStage?.id
+          ? { ...s, leads: s.leads.filter((l) => l.id !== leadId) }
+          : s,
+      ),
+    );
+
+    const res = await fetch('/api/contacts/remove', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contactId: leadId, reason: 'not_interested' }),
+    });
+
+    if (!res.ok) {
+      setError('Could not remove that lead.');
+      loadPipeline(activeId);
+      return;
+    }
+
+    onTrashed?.({
+      contactId: leadId,
+      name:
+        [lead.firstName, lead.lastName].filter(Boolean).join(' ') || lead.phone,
+      stageId: fromStage?.id ?? null,
+    });
+  }
+
   async function handleDragEnd(event: DragEndEvent) {
     // The operator moving a lead by hand is a decision. It ends AI stage
     // suggestions for this call rather than letting the model keep proposing a
@@ -81,11 +133,17 @@ export function PipelineBoard({
     onManualStageChoice?.();
     const leadId = String(event.active.id);
     setDraggingId(null);
+    setOverTrash(false);
 
     const destination = event.over ? String(event.over.id) : null;
     if (!destination) return;
 
-    const targetStageId = destination === UNASSIGNED ? null : destination;
+    if (destination === TRASH_ZONE_ID) {
+      await trashLead(leadId);
+      return;
+    }
+
+    const targetStageId = destination;
 
     // Find where the lead currently lives.
     const fromStage = stages.find((s) => s.leads.some((l) => l.id === leadId));
@@ -242,21 +300,14 @@ export function PipelineBoard({
       <DndContext
         sensors={sensors}
         onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
         onDragEnd={handleDragEnd}
       >
+        {/* No Unassigned column (§3.1). It was never a stage, only the absence
+            of one, and leads landed there on import where a dial session that
+            walks the board could not see them. Everything starts in New. */}
         <div className="scroll-thin flex min-h-0 flex-1 gap-3 overflow-x-auto px-4 pb-4">
-          <StageColumn
-            id={UNASSIGNED}
-            name="Unassigned"
-            color="#434a59"
-            leads={unassigned}
-            onCallLeadId={onCallLeadId}
-            aiSuggested={false}
-            showDealValue={showDealValue}
-            editable={false}
-          />
-
-          {stages.map((stage) => (
+          {stages.map((stage, i) => (
             <StageColumn
               key={stage.id}
               id={stage.id}
@@ -266,6 +317,10 @@ export function PipelineBoard({
               onCallLeadId={onCallLeadId}
               aiSuggested={aiSuggestedStageId === stage.id}
               showDealValue={showDealValue}
+              // The first column is the dial queue, and its order is the order
+              // calls go out in. Saying so is what makes dragging a card to the
+              // top a deliberate act rather than a tidy-up (§3.2).
+              caption={i === 0 ? 'dial order — top first' : undefined}
               editable
               onRename={(name) => renameStage(stage.id, name)}
               onRecolor={(color) => recolorStage(stage.id, color)}
@@ -273,6 +328,8 @@ export function PipelineBoard({
             />
           ))}
         </div>
+
+        <TrashZone active={draggingId !== null} over={overTrash} />
 
         <DragOverlay dropAnimation={null}>
           {draggingLead && (

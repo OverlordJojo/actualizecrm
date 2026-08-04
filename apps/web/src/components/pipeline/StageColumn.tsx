@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useDroppable } from '@dnd-kit/core';
 import { cn } from '@/lib/cn';
 import { LeadCard } from './LeadCard';
-import { UNASSIGNED, type BoardLead } from './types';
+import { type BoardLead } from './types';
 
 const STAGE_COLORS = [
   '#64748b',
@@ -24,6 +24,7 @@ export function StageColumn({
   leads,
   onCallLeadId,
   aiSuggested,
+  caption,
   showDealValue,
   editable,
   onRename,
@@ -39,6 +40,8 @@ export function StageColumn({
   /// pulsing outline rather than moving anything — the operator decides, and
   /// their choice locks further suggestions out for the call.
   aiSuggested?: boolean;
+  /// Small note under the column name — used to mark the dial queue (§3.2).
+  caption?: string;
   showDealValue: boolean;
   /// The Unassigned column is not a real stage, so it cannot be renamed or
   /// deleted.
@@ -105,6 +108,13 @@ export function StageColumn({
             title={editable ? 'Double-click to rename' : undefined}
           >
             {name}
+            {/* §3.2: reordering this column reorders the dial queue, so say
+                so — otherwise dragging a card to the top looks cosmetic. */}
+            {caption && (
+              <span className="block truncate text-[9px] font-normal text-ink-500">
+                {caption}
+              </span>
+            )}
           </button>
         )}
 
@@ -197,7 +207,7 @@ export function StageColumn({
 
         {leads.length === 0 && (
           <div className="flex h-16 items-center justify-center text-[11px] text-ink-600">
-            {id === UNASSIGNED ? 'No unassigned leads' : 'Drop leads here'}
+            {'Drop leads here'}
           </div>
         )}
       </div>

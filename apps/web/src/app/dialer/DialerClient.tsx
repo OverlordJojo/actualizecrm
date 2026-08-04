@@ -10,6 +10,8 @@ import {
   type VisibleCustomField,
 } from '@/components/dialer/ActiveLeadCard';
 import { BurstCards } from '@/components/dialer/BurstCards';
+import { TrashToast } from '@/components/dialer/TrashToast';
+import { CreateLeadModal } from '@/components/dialer/CreateLeadModal';
 import { DialControls } from '@/components/dialer/DialControls';
 import { SuggestionChips } from '@/components/dialer/SuggestionChips';
 import { BookingPanel } from '@/components/dialer/BookingPanel';
@@ -36,12 +38,10 @@ export interface LeadListOption {
 export function DialerClient({
   leadCount: initialLeadCount,
   board: initialBoard,
-  lists,
   visibleCustomFields,
 }: {
   leadCount: number;
   board: BoardData | null;
-  lists: LeadListOption[];
   visibleCustomFields: VisibleCustomField[];
 }) {
   const call = useCall();
@@ -58,8 +58,8 @@ export function DialerClient({
     evidence: string | null;
   } | null>(null);
 
-  const [listOptions, setListOptions] = useState(lists);
-  const [selectedListId, setSelectedListId] = useState('');
+  const [createOpen, setCreateOpen] = useState(false);
+  const [trashed, setTrashed] = useState<{ contactId: string; name: string; stageId: string | null; expiresAt: number } | null>(null);
   const [loadingQueue, setLoadingQueue] = useState(false);
 
   const refreshBoard = useCallback(async () => {
@@ -78,20 +78,28 @@ export function DialerClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [call.lineState]);
 
-  async function loadQueue(listId: string) {
-    setSelectedListId(listId);
-    if (!listId) {
-      call.setQueue([]);
-      return;
-    }
+  /**
+   * The dial queue is the New column, in board order (§3.2).
+   *
+   * There is no list to load any more. Lists were a second, invisible ordering
+   * that could disagree with the board the operator was looking at — they would
+   * drag a card to the top of New and the dialer would call somebody else. Now
+   * the column *is* the queue, which is why its header says "dial order".
+   */
+  const loadQueue = useCallback(async () => {
     setLoadingQueue(true);
     try {
-      const res = await fetch(`/api/queue?listId=${listId}`);
+      const res = await fetch('/api/queue?stage=New');
       if (res.ok) call.setQueue(await res.json());
     } finally {
       setLoadingQueue(false);
     }
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    void loadQueue();
+  }, [loadQueue, boardKey]);
 
   /// Inline edits from the Active Lead Card (§3.1). Returns an error message
   /// for the card to show, or null. The card keeps the operator's text either
@@ -147,19 +155,9 @@ export function DialerClient({
             {formatCallTimer(call.callSeconds)}
           </span>
         )}
-        <select
-          className="input w-auto py-1.5 text-xs"
-          value={selectedListId}
-          onChange={(e) => loadQueue(e.target.value)}
-          disabled={call.sessionActive}
-        >
-          <option value="">Load a list…</option>
-          {listOptions.map((l) => (
-            <option key={l.id} value={l.id}>
-              {l.name} ({l.count})
-            </option>
-          ))}
-        </select>
+        <button className="btn-ghost" onClick={() => setCreateOpen(true)}>
+          Create lead
+        </button>
         <button className="btn-ghost" onClick={() => setImportOpen(true)}>
           Import leads
         </button>
@@ -261,6 +259,9 @@ export function DialerClient({
           onCallLeadId={call.activeLead?.id ?? null}
           aiSuggestedStageId={call.suggestedStageId}
           onManualStageChoice={call.lockStageChoice}
+          onTrashed={(info) =>
+            setTrashed({ ...info, expiresAt: Date.now() + 10_000 })
+          }
         />
       ) : (
         <div className="flex flex-1 items-center justify-center text-sm text-ink-500">
@@ -268,19 +269,50 @@ export function DialerClient({
         </div>
       )}
 
+      {/* §3.3 / §3.4 — ten seconds to take it back. Two sources, one toast:
+          a card dragged to the trash, and a call that ended with no outcome. */}
+      {(trashed || call.trashToast) && (
+        <TrashToast
+          name={trashed?.name ?? 'that lead'}
+          expiresAt={(trashed ?? call.trashToast)!.expiresAt}
+          onUndo={async () => {
+            if (trashed) {
+              await fetch('/api/dialer/outcome', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  action: 'undo',
+                  contactId: trashed.contactId,
+                  stageId: trashed.stageId,
+                }),
+              }).catch(() => {});
+              setTrashed(null);
+              refreshBoard();
+            } else {
+              await call.undoTrash();
+              refreshBoard();
+            }
+          }}
+        />
+      )}
+
+      <CreateLeadModal
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onCreated={() => {
+          setLeadCount((c) => c + 1);
+          refreshBoard();
+        }}
+      />
+
       <ImportModal
         open={importOpen}
         onClose={() => setImportOpen(false)}
         onImported={(report) => {
+          // Imports still record a source label for provenance (§7.1), but a
+          // list is no longer a thing you dial — imported leads land in New and
+          // the board is the queue.
           setLeadCount((c) => c + report.added);
-          setListOptions((prev) => [
-            {
-              id: report.listId,
-              name: report.listName,
-              count: report.added + report.merged,
-            },
-            ...prev,
-          ]);
           refreshBoard();
         }}
       />

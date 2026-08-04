@@ -35,7 +35,8 @@ export interface BoardData {
 }
 
 /// Sentinel id for the Unassigned column, which is not a real stage row.
-export const UNASSIGNED = '__unassigned__';
+/// Droppable id for the trash zone that animates in mid-drag (§3.3).
+export const TRASH_ZONE_ID = '__trash__';
 
 export function leadDisplayName(lead: BoardLead): string {
   const name = [lead.firstName, lead.lastName].filter(Boolean).join(' ').trim();

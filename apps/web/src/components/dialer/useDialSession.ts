@@ -11,7 +11,7 @@ import {
   type RingAudioConfig,
 } from '@/integrations/audio/useRingAudio';
 import type { DispositionValue } from '@/lib/dispositions';
-import { DISPOSITION_BY_VALUE } from '@/lib/dispositions';
+import { DISPOSITION_BY_HOTKEY } from '@/lib/dispositions';
 import type { ActiveLead } from './ActiveLeadCard';
 import type { SessionStats } from './DialControls';
 
@@ -78,6 +78,21 @@ interface Governor {
 /// marked as such rather than quietly left.
 const POLL_MS = 1000;
 
+/**
+ * How long an auto-trashed lead stays undoable (§3.4).
+ *
+ * The next burst does not begin until this expires. A dropped call, a misdial
+ * or a fat-fingered space bar must not silently destroy a lead, and an Undo the
+ * operator is dialled away from is not an Undo.
+ */
+const TRASH_UNDO_MS = 10_000;
+
+interface TrashToast {
+  contactId: string;
+  stageId: string | null;
+  expiresAt: number;
+}
+
 export function useDialSession({
   queue,
   gapSeconds,
@@ -107,6 +122,7 @@ export function useDialSession({
   });
   const [suggestedStageId, setSuggestedStageId] = useState<string | null>(null);
   const [stageLocked, setStageLocked] = useState(false);
+  const [trashToast, setTrashToast] = useState<TrashToast | null>(null);
 
   const sessionIdRef = useRef<string | null>(null);
   sessionIdRef.current = sessionId;
@@ -275,10 +291,20 @@ export function useDialSession({
       clearAdvance();
       return;
     }
+    // §3.4: hold the next burst while a trashed lead is still undoable.
+    if (trashToast && Date.now() < trashToast.expiresAt) return;
     if (advancingRef.current || advanceTimer.current) return;
     advancingRef.current = true;
     startGap();
-  }, [view, startGap, clearAdvance]);
+  }, [view, startGap, clearAdvance, trashToast]);
+
+  // Expire the undo window, which also releases the advance held above.
+  useEffect(() => {
+    if (!trashToast) return;
+    const remaining = Math.max(0, trashToast.expiresAt - Date.now());
+    const t = setTimeout(() => setTrashToast(null), remaining);
+    return () => clearTimeout(t);
+  }, [trashToast]);
 
   // Poll while a session exists.
   useEffect(() => {
@@ -402,6 +428,14 @@ export function useDialSession({
     [],
   );
 
+  /**
+   * Records the outcome and files the lead in one step (§3.5).
+   *
+   * "Not Interested" trashes the lead, which is destructive enough that the
+   * next burst waits for the undo window to close (§3.4). Being yanked into
+   * the next call while a ten-second Undo is still on screen makes the Undo
+   * decorative.
+   */
   const setDisposition = useCallback(
     async (value: DispositionValue) => {
       const callId = view?.active?.callId;
@@ -409,11 +443,23 @@ export function useDialSession({
 
       if (value === 'booked') setStats((s) => ({ ...s, booked: s.booked + 1 }));
 
-      await fetch(`/api/calls/${callId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ disposition: value }),
-      }).catch(() => {});
+      try {
+        const res = await fetch('/api/dialer/outcome', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ callId, disposition: value }),
+        });
+        const result = await res.json();
+        if (result?.trashed && result.contactId) {
+          setTrashToast({
+            contactId: result.contactId,
+            stageId: result.previousStageId ?? null,
+            expiresAt: Date.now() + TRASH_UNDO_MS,
+          });
+        }
+      } catch {
+        setError('The outcome was not saved. Try again before moving on.');
+      }
 
       onCallEnded?.();
       // Setting an outcome while connected means the operator is done talking,
@@ -422,6 +468,22 @@ export function useDialSession({
     },
     [view?.active?.callId, hangup, onCallEnded],
   );
+
+  const undoTrash = useCallback(async () => {
+    const toast = trashToast;
+    if (!toast) return;
+    setTrashToast(null);
+    await fetch('/api/dialer/outcome', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'undo',
+        contactId: toast.contactId,
+        stageId: toast.stageId,
+      }),
+    }).catch(() => {});
+    onCallEnded?.();
+  }, [trashToast, onCallEnded]);
 
   const dropVoicemail = useCallback(async () => {
     const callId = view?.active?.callId;
@@ -533,11 +595,8 @@ export function useDialSession({
         case '1':
         case '2':
         case '3':
-        case '4':
-        case '5': {
-          const match = Object.values(DISPOSITION_BY_VALUE).find(
-            (d) => d.hotkey === e.key,
-          );
+        case '4': {
+          const match = DISPOSITION_BY_HOTKEY[e.key];
           if (match) {
             e.preventDefault();
             void setDisposition(match.value);
@@ -631,6 +690,8 @@ export function useDialSession({
     hangupAndNext,
     toggleMute: phone.toggleMute,
     setDisposition,
+    trashToast,
+    undoTrash,
     callControlId: phone.callControlId,
 
     spotifyReady: ringAudio.spotifyReady,
