@@ -280,6 +280,21 @@ model Call {
   /// Seconds this leg spent in HeldOwnerQueue before being bridged or dropped.
   heldSeconds Int @default(0)
 
+  // --- conference anchoring (§2.2) ------------------------------------------
+  /// The session this leg belongs to, when it was dialled by one.
+  sessionId String?
+  session   DialSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  /// Moment this leg was joined to the conference and reached the operator.
+  ///
+  /// This is what the hang-up button is driven by. Not browser line state:
+  /// binding the control to the browser's own SDK left it permanently disabled
+  /// during a burst, because the legs belong to the server and the browser is
+  /// merely a conference participant.
+  bridgedAt DateTime?
+  /// Moment this leg was parked in the hold queue as a queued owner.
+  heldAt DateTime?
+
   // --- transcription (§5) ---------------------------------------------------
   /// Path under data/recordings/, relative.
   recordingPath String?
@@ -420,7 +435,30 @@ model DialSession {
   booked     Int @default(0)
   talkTimeSec Int @default(0)
 
+  // --- conference anchoring (§2.2) ------------------------------------------
+  /// "starting" | "live" | "paused" | "ending" | "ended"
+  status String @default("starting")
+
+  /// The Telnyx conference every leg in this session passes through.
+  ///
+  /// The anchor is the point of the design: the operator joins once, at session
+  /// start, and stays for the whole session. Prospect legs come and go around
+  /// them. Because the operator's audio path does not belong to any prospect
+  /// leg, hanging up a prospect can never drop the operator — which is exactly
+  /// what the transfer-based engine could not guarantee.
+  conferenceId   String?
+  conferenceName String?
+
+  /// The operator's own leg. Originated to their SIP address at session start
+  /// and held open until the session ends.
+  operatorLegId String?
+
+  /// Lines opened per burst, captured at session start so a mid-session change
+  /// to the setting cannot make the running session inconsistent.
+  linesPerBurst Int @default(1)
+
   queue DialQueueItem[]
+  calls Call[]
 }
 
 model DialQueueItem {

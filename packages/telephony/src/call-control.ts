@@ -257,6 +257,61 @@ export async function originate(params: {
   };
 }
 
+/**
+ * Originates the operator's own leg, to their SIP address (§2.2 step 1).
+ *
+ * Deliberately not `originate()`: no answering-machine detection. AMD on the
+ * operator's own softphone would be nonsense, and premium AMD holds a leg
+ * unbridged for up to five seconds while it decides — five seconds of the
+ * operator staring at a dead session at the start of every run.
+ *
+ * The long `timeoutSecs` is intentional too. This leg is the session; if it
+ * fails to establish there is no session, so it gets time to register rather
+ * than racing a browser that may still be waking its microphone.
+ */
+export async function originateOperatorLeg(params: {
+  sipUri: string;
+  from: string;
+  connectionId: string;
+  webhookUrl: string;
+  clientState: string;
+  timeoutSecs?: number;
+}): Promise<{ callControlId: string | null; callSessionId: string | null }> {
+  const res = await fetch(`${TELNYX_API}/calls`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey()}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      connection_id: params.connectionId,
+      to: params.sipUri,
+      from: params.from,
+      webhook_url: params.webhookUrl,
+      webhook_url_method: 'POST',
+      client_state: params.clientState,
+      timeout_secs: params.timeoutSecs ?? 60,
+    }),
+    ...NO_STORE,
+  });
+
+  if (!res.ok) {
+    throw new TelnyxCallError(
+      `Could not reach the operator's softphone (${res.status}): ${telnyxErrorDetail(await res.text())}`,
+      res.status,
+      'operator_leg',
+    );
+  }
+
+  const json = (await res.json()) as {
+    data?: { call_control_id?: string; call_session_id?: string };
+  };
+  return {
+    callControlId: json.data?.call_control_id ?? null,
+    callSessionId: json.data?.call_session_id ?? null,
+  };
+}
+
 /// Telnyx `client_state` is base64 on the wire and echoed back on every event
 /// for the call. It is how a webhook learns what a command was for without the
 /// two services sharing anything but the database.
