@@ -2,6 +2,7 @@ export interface BoardLead {
   id: string;
   firstName: string | null;
   lastName: string | null;
+  jobTitle: string | null;
   companyName: string | null;
   companyLocation: string | null;
   phone: string;

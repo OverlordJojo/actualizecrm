@@ -9,6 +9,7 @@ import {
   type ActiveLead,
   type VisibleCustomField,
 } from '@/components/dialer/ActiveLeadCard';
+import { BurstCards } from '@/components/dialer/BurstCards';
 import { DialControls } from '@/components/dialer/DialControls';
 import { SuggestionChips } from '@/components/dialer/SuggestionChips';
 import { BookingPanel } from '@/components/dialer/BookingPanel';
@@ -182,6 +183,19 @@ export function DialerClient({
       {/* Regions A and B. overflow-hidden matters: Region B must never bleed
           over the board. */}
       <div className="flex h-[320px] shrink-0 gap-5 overflow-hidden px-5 py-4">
+        {/* While a burst is ringing the operator sees every leg side by side;
+            the instant one bridges this collapses to that lead's full card
+            (§3.7). Showing only the first leg is what made a three-line burst
+            look identical to a single-line one. */}
+        {!call.activeLead && call.ringingLeads.length > 0 ? (
+          <div className="flex-1 overflow-y-auto">
+            <BurstCards
+              ringing={call.ringingLeads}
+              resolved={call.resolved}
+              held={call.held}
+            />
+          </div>
+        ) : (
         <ActiveLeadCard
           lead={call.activeLead}
           visibleCustomFields={visibleCustomFields}
@@ -205,6 +219,7 @@ export function DialerClient({
             </>
           }
         />
+        )}
         <LiveTranscript
           callId={call.activeCallId}
           live={call.lineState === 'connected'}
@@ -234,6 +249,7 @@ export function DialerClient({
           held={call.held}
           governor={call.governor}
           linesPerBurst={call.linesPerBurst}
+          canHangup={call.canHangup}
         />
       </div>
 

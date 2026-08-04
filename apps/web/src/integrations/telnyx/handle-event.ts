@@ -10,13 +10,6 @@ import {
 import { archiveRecording, processCall } from '@/integrations/ai/pipeline';
 import { resolveRecording, playbackUrl } from '@/integrations/audio/voicemail';
 import { formatPhone } from '@/lib/phone';
-import {
-  burstState,
-  routeHumanAnswer,
-  routeNonHumanAnswer,
-  startHoldAudio,
-  type BurstState,
-} from '@/integrations/telnyx/burst';
 
 /**
  * App-side handling for the Telnyx call events that need something only the app
@@ -29,8 +22,10 @@ import {
  * authenticated with the shared secret.
  *
  * The events that still land here are the ones tied to app-owned credentials:
- * bulk voicemail drops, recording archival, and the multi-line burst engine
- * that §2 replaces with conference-anchored dialing.
+ * bulk voicemail drops and recording archival. Multi-line dialing is not one
+ * of them any more: §2 replaced the transfer-based burst engine with the
+ * conference-anchored one in `@actualizecrm/dialer`, which the worker drives
+ * directly.
  */
 
 interface TelnyxEvent {
@@ -82,8 +77,7 @@ export async function handleTelnyxEvent(body: TelnyxEvent): Promise<HandledEvent
   }
 
   const drop = voicemailDropState(p.client_state);
-  const burst = burstState(decodeClientState(p.client_state));
-  const call = await findCall(callControlId, p.to, drop?.callId ?? burst?.callId);
+  const call = await findCall(callControlId, p.to, drop?.callId);
 
   try {
     switch (eventType) {
@@ -98,11 +92,6 @@ export async function handleTelnyxEvent(body: TelnyxEvent): Promise<HandledEvent
       }
 
       case 'call.answered': {
-        // A burst leg is not routed on answer — AMD decides whether this is a
-        // person, a machine or an IVR, and until it does nobody should be
-        // bridged and nothing should be recorded.
-        if (burst) break;
-
         if (call) {
           await db.call.update({
             where: { id: call.id },
@@ -153,17 +142,6 @@ export async function handleTelnyxEvent(body: TelnyxEvent): Promise<HandledEvent
 
             if (!waitForGreeting) {
               await performDrop(callControlId, call.id, drop, verdict);
-            }
-          }
-
-          // §4.3 per-leg routing. `not_sure` is treated as non-human on
-          // purpose: bridging the operator to something that might be an IVR
-          // wastes the one resource a burst is trying to protect.
-          if (burst) {
-            if (verdict === 'human') {
-              await routeHumanAnswer(callControlId, burst);
-            } else {
-              await routeNonHumanAnswer(callControlId, burst, verdict);
             }
           }
         }
@@ -224,18 +202,6 @@ export async function handleTelnyxEvent(body: TelnyxEvent): Promise<HandledEvent
             await recordMissedInbound(call.id, call.contactId);
           }
 
-          // A held caller who hung up on their own is not abandoned by us —
-          // they left. Recording it as abandoned would inflate the governor's
-          // rate with calls that were never at risk of the 3% cap.
-          if (burst && call.status === 'held') {
-            const heldFor = call.answeredAt
-              ? Math.round((Date.now() - call.answeredAt.getTime()) / 1000)
-              : 0;
-            await db.call.update({
-              where: { id: call.id },
-              data: { status: 'no_answer', heldSeconds: heldFor },
-            });
-          }
         }
         break;
       }
@@ -265,15 +231,6 @@ export async function handleTelnyxEvent(body: TelnyxEvent): Promise<HandledEvent
               at: new Date().toISOString(),
             });
           }
-        }
-        break;
-      }
-
-      // The identification prompt has finished playing to a queued owner, so
-      // hold music starts. Silence is what makes people hang up.
-      case 'call.speak.ended': {
-        if (burst && call?.status === 'held') {
-          await startHoldAudio(callControlId).catch(() => {});
         }
         break;
       }

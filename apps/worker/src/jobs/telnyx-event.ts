@@ -78,10 +78,6 @@ export interface TelnyxEventResult {
 function needsApp(eventType: string, state: Record<string, unknown> | null): boolean {
   if (eventType === 'call.recording.saved') return true;
   if (state?.k === 'vmdrop') return true;
-  // The multi-line burst engine is mid-rewrite (§2). Its events still route to
-  // the app so today's behaviour is unchanged until the conference-anchored
-  // engine replaces it outright.
-  if (state?.k === 'burst') return true;
   return false;
 }
 

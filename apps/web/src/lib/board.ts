@@ -5,6 +5,7 @@ const LEAD_SELECT = {
   id: true,
   firstName: true,
   lastName: true,
+  jobTitle: true,
   companyName: true,
   companyLocation: true,
   phone: true,

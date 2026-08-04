@@ -38,6 +38,7 @@ model Contact {
   /// E.164, e.g. +17025551234. Unique — this is the dedupe key on import.
   phone String @unique
 
+  jobTitle    String?
   companyName     String?
   companyLocation String?
   email           String?

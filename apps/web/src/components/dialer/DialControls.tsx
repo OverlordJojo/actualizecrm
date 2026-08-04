@@ -63,6 +63,7 @@ export function DialControls({
   held,
   governor,
   linesPerBurst,
+  canHangup,
 }: {
   lineState: LineState;
   muted: boolean;
@@ -82,6 +83,9 @@ export function DialControls({
   /// Live abandonment governor state (§4.4).
   governor: { rate: number; blocked: boolean; allowedLines: number; warning: string | null } | null;
   linesPerBurst: number;
+  /// True the instant a prospect leg is bridged into the conference, false
+  /// otherwise — driven by webhooks, never optimistic (§2.4).
+  canHangup: boolean;
   /// Seconds remaining before the dialer auto-advances, or null when idle.
   countdown: number | null;
   /// Seconds since the prospect answered, or null when not connected.
@@ -96,8 +100,18 @@ export function DialControls({
   onVoicemailDrop: () => void;
 }) {
   const [manual, setManual] = useState('');
-  const onCall = ['dialing', 'ringing', 'connected'].includes(lineState);
   const manualValid = toE164(manual) !== null;
+
+  /**
+   * Whether a prospect is actually on the line.
+   *
+   * From the server's leg state, never from `lineState` (§2.4). Deriving it
+   * from the browser's SDK is the bug that was reported: during a burst the
+   * legs belong to the server and the browser sits idle in the conference, so
+   * every in-call control rendered permanently disabled and the operator had
+   * nothing but Pause and End.
+   */
+  const onCall = canHangup;
 
   const elapsedMin = stats.startedAt
     ? Math.max((Date.now() - stats.startedAt) / 60000, 1 / 60)
@@ -198,7 +212,7 @@ export function DialControls({
         <button
           className="btn-ghost py-1.5 text-xs"
           onClick={onToggleMute}
-          disabled={lineState !== 'connected'}
+          disabled={!onCall}
         >
           {muted ? 'Unmute' : 'Mute'}
         </button>
