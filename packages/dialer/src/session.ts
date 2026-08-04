@@ -644,3 +644,69 @@ export async function sweepExpiredHolds(): Promise<number> {
 
   return expired.length;
 }
+
+/**
+ * Records why the operator's leg never made it (§2.2 step 1).
+ *
+ * Only writes when the conference was never created — that is precisely the
+ * case where the session silently did nothing. Once the conference exists, a
+ * hangup is the operator leaving normally and needs no explanation.
+ *
+ * The causes are translated because the operator should not have to know what
+ * a 480 is, and because the two most likely ones have completely different
+ * fixes: an unregistered softphone is something they can act on immediately,
+ * while a rejected route is a configuration problem.
+ */
+export async function recordOperatorLegFailure(
+  sessionId: string,
+  cause: string | null,
+): Promise<void> {
+  const session = await db.dialSession.findUnique({ where: { id: sessionId } });
+  if (!session || session.conferenceId) return;
+
+  const explanation = explainOperatorFailure(cause);
+
+  await db.dialSession.update({
+    where: { id: sessionId },
+    data: { failureReason: explanation },
+  });
+}
+
+export function explainOperatorFailure(cause: string | null): string {
+  switch ((cause ?? '').toLowerCase()) {
+    case 'no_answer':
+    case 'timeout':
+    case 'originator_cancel':
+      return (
+        'The dialer called your softphone and it rang without being answered. ' +
+        'If you did not hear anything, the browser tab was not registered as a ' +
+        'phone — check that the Dialer page reads Ready before starting.'
+      );
+    case 'unallocated_number':
+    case 'no_route_destination':
+    case 'invalid_number_format':
+      return (
+        'Telnyx could not route the call to your softphone at all. The WebRTC ' +
+        'credential exists but the SIP address is unreachable from the Call ' +
+        'Control Application — this is a configuration problem, not something ' +
+        'you did.'
+      );
+    case 'call_rejected':
+    case 'user_busy':
+      return (
+        'Your softphone refused the call. Usually another tab is registered ' +
+        'with the same credential and took it — close other Dialer tabs and ' +
+        'try again.'
+      );
+    case 'normal_clearing':
+      return (
+        'The call to your softphone ended before it was answered. If the ' +
+        'browser never rang, it was not registered as a phone when the session ' +
+        'started.'
+      );
+    default:
+      return cause
+        ? `The dialer could not reach your softphone (${cause}).`
+        : 'The dialer could not reach your softphone, and the carrier gave no reason.';
+  }
+}

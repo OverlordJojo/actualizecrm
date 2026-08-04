@@ -454,6 +454,15 @@ model DialSession {
   /// and held open until the session ends.
   operatorLegId String?
 
+  /// Why the session could not start, in operator language.
+  ///
+  /// The operator leg failing is the one failure with no visible symptom: no
+  /// ringing, no error, no controls — just a dialer that does nothing. The
+  /// carrier's own reason is the only thing that distinguishes "your softphone
+  /// was not registered" from "Telnyx would not route the call", so it is
+  /// captured rather than discarded.
+  failureReason String?
+
   /// The prospect currently in the conference with the operator.
   ///
   /// Also the race lock. When several legs in a burst answer in the same

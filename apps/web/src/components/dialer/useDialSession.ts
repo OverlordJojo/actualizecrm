@@ -41,6 +41,7 @@ interface SessionView {
   status: 'starting' | 'live' | 'paused' | 'ending' | 'ended';
   conferenceId: string | null;
   linesPerBurst: number;
+  failureReason: string | null;
   active: {
     callId: string;
     contactId: string;
@@ -334,6 +335,18 @@ export function useDialSession({
     const leads = queueRef.current;
     if (leads.length === 0) return;
 
+    // The session is a call *to* this browser, so the browser has to be
+    // registered as a phone before there is anywhere to send it. Without this
+    // guard the leg originates, rings an address nobody is listening at, and
+    // the dialer sits there doing nothing with no way to tell why.
+    if (phone.state === 'offline' || phone.state === 'connecting') {
+      setError(
+        'The dialer is not registered as a phone yet, so there is nowhere to ' +
+          'connect calls to. Wait for the line to read Ready and try again.',
+      );
+      return;
+    }
+
     setError(null);
     // The browser will not start audio without a user gesture, and this runs
     // inside the Start-session click (§4.2). Initialising Spotify anywhere else
@@ -363,7 +376,18 @@ export function useDialSession({
       expectingOperatorLeg.current = false;
       setError(e instanceof Error ? e.message : 'Could not start the session.');
     }
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phone.state]);
+
+  // A session that ends before its conference exists never started. Surface the
+  // carrier's reason rather than leaving a dialer that silently did nothing.
+  useEffect(() => {
+    if (view?.failureReason) {
+      setError(view.failureReason);
+      setSessionId(null);
+      sessionIdRef.current = null;
+    }
+  }, [view?.failureReason]);
 
   const pauseSession = useCallback(async () => {
     clearAdvance();

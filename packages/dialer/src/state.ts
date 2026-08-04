@@ -58,6 +58,8 @@ export interface SessionView {
   conferenceId: string | null;
   operatorLegId: string | null;
   linesPerBurst: number;
+  /// Why the session never started, in operator language. Null when fine.
+  failureReason: string | null;
 
   /// The prospect the operator is talking to, if any. Everything the UI needs
   /// to decide whether Hang up is live comes from here — never from the
@@ -120,6 +122,7 @@ export async function sessionView(sessionId: string): Promise<SessionView | null
     conferenceId: session.conferenceId,
     operatorLegId: session.operatorLegId,
     linesPerBurst: session.linesPerBurst,
+    failureReason: session.failureReason,
 
     active: active
       ? {

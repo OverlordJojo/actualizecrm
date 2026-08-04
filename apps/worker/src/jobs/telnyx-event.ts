@@ -256,9 +256,21 @@ async function handleSessionEvent(
         // The operator's leg going away ends the session, whatever the cause.
         // Leaving prospects in a conference nobody is coming back to is the
         // worst available outcome.
-        const { endSession } = await import('@actualizecrm/dialer');
+        const { endSession, recordOperatorLegFailure } = await import(
+          '@actualizecrm/dialer'
+        );
+
+        // A leg that ends *before* the conference exists never got answered, so
+        // the session never started. That is invisible from the operator's
+        // chair — no ringing, no error, no controls — and the carrier's cause is
+        // the only thing that says why.
+        await recordOperatorLegFailure(sessionId, p.hangup_cause ?? null);
         await endSession(sessionId).catch(() => {});
-        return { handled: true, eventType, note: 'operator left — session ended' };
+        return {
+          handled: true,
+          eventType,
+          note: `operator leg ended (${p.hangup_cause ?? 'no cause'})`,
+        };
       }
 
       default:
