@@ -10,6 +10,10 @@ import {
 } from './queue';
 import { markScheduledFailed } from './jobs/scheduled';
 import { processJob, lastSuccess } from './processor';
+import { handleTelnyxWebhook } from './telnyx/receiver';
+import { runWebhookProbe } from './telnyx/probe';
+import { registerWebhook, lastRegistration } from './telnyx/register';
+import { WEBHOOK_PATH, webhookUrl } from '@actualizecrm/telephony';
 
 /**
  * ActualizeCRM automation worker.
@@ -58,6 +62,16 @@ worker.on('error', (err) => console.error('[worker] error', err));
 // --- health -----------------------------------------------------------------
 
 const server = http.createServer(async (req, res) => {
+  // Telnyx call events (§1.2). First, because it is the highest-volume route
+  // here and the only one with a latency budget — Telnyx times out fast and
+  // retries anything slow. The handler authenticates by ed25519 signature; it
+  // is deliberately not behind the shared secret, because Telnyx cannot send
+  // one.
+  if (req.url === WEBHOOK_PATH && req.method === 'POST') {
+    await handleTelnyxWebhook(req, res);
+    return;
+  }
+
   if (req.url === '/health') {
     let dbOk = false;
     let dbError: string | null = null;
@@ -87,6 +101,8 @@ const server = http.createServer(async (req, res) => {
           redis: counts ? 'connected' : 'unreachable',
           queue: counts,
           lastSuccess,
+          // Whether Telnyx knows where to send events, without reading logs.
+          telnyxWebhook: lastRegistration,
           uptimeSeconds: Math.round(process.uptime()),
         },
         null,
@@ -125,14 +141,51 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // The Settings round-trip test (§1.2). Secret-gated: it originates a real
+  // leg, so it must not be something the public internet can trigger.
+  if (req.url === '/telnyx/test-webhook' && req.method === 'POST') {
+    if (req.headers['x-worker-secret'] !== process.env.WORKER_SHARED_SECRET) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized' }));
+      return;
+    }
+
+    const result = await runWebhookProbe().catch((err) => ({
+      ok: false as const,
+      error: err instanceof Error ? err.message : String(err),
+    }));
+
+    // 200 either way: the request succeeded, and the *test* result is the body.
+    // A non-2xx here would be indistinguishable from the app failing to reach
+    // the worker at all, which is a different problem with a different fix.
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ...result, registration: lastRegistration }));
+    return;
+  }
+
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'Not found' }));
 });
 
 async function main() {
   await scheduleRepeatables();
+
+  // Point Telnyx at this deployment before serving (§1.2). Deliberately not
+  // fatal: a Telnyx outage at boot must not stop the worker from running
+  // automations, which is what it exists for. The failure is logged and
+  // surfaced by the Settings test rather than crash-looping the service.
+  await registerWebhook();
+
   server.listen(PORT, () => {
     console.log(`[worker] health on :${PORT}/health`);
+    console.log(`[worker] telnyx events on :${PORT}${WEBHOOK_PATH}`);
+    const url = webhookUrl();
+    if (!url) {
+      console.warn(
+        '[worker] no public webhook URL — set WEBHOOK_BASE_URL locally, or ' +
+          'expect RAILWAY_PUBLIC_DOMAIN in a Railway deploy.',
+      );
+    }
   });
 }
 

@@ -26,8 +26,11 @@ in-browser softphone, placing calls, and running the power-dialer loop.
 | `TELNYX_SIP_USERNAME` | Credential the browser registers with |
 | `TELNYX_SIP_PASSWORD` | Password for that credential |
 
-`PUBLIC_WEBHOOK_URL` is written by `scripts/tunnel.ts` and consumed here, but
-owned by the root.
+| `TELNYX_PUBLIC_KEY` | Verifies webhook signatures. **Not** the API key |
+
+Telnyx REST calls and signature verification live in `packages/telephony`,
+shared with the worker. This folder owns what is app-specific: WebRTC
+credentials, caller-ID rotation, number provisioning.
 
 ---
 
@@ -62,17 +65,30 @@ You do not need to be a developer to do this. Follow it exactly.
 4. Under **Connection Settings**:
    - **WebRTC** → turn **ON**. This is what lets the browser be the phone.
    - **Webhook API Version** → **API v2**.
-   - Leave the webhook URL blank for now — `npm run tunnel` fills it in.
+   - Leave the webhook URL blank. The worker fills it in on every boot and
+     will overwrite whatever you type here anyway.
 5. Save. Copy the **Connection ID** shown at the top of the connection page
    into `.env.local` as `TELNYX_CONNECTION_ID=`.
 6. On the same connection, open the **Credentials** tab and note the **SIP
    username** and **password**. Put them in `.env.local` as
    `TELNYX_SIP_USERNAME=` and `TELNYX_SIP_PASSWORD=`.
 
-> **Running two instances off one Telnyx account?** Each machine needs its own
+> **Running two instances off one Telnyx account?** Each needs its own
 > connection created this way, with its own `TELNYX_CONNECTION_ID`. Sharing one
-> means `npm run tunnel` overwrites the other person's webhook URL and their
-> auto-advance breaks silently. See the clone note in the root `CLAUDE.md`.
+> means each worker's boot-time registration overwrites the other's webhook URL,
+> and one of them silently stops receiving call events.
+
+### 3b. Get the webhook signing key
+
+1. Left sidebar → **Account Settings** → **Keys**.
+2. Copy the **Public Key**. This is *not* the API key.
+3. Put it in `.env.local` and on Railway as `TELNYX_PUBLIC_KEY=`.
+
+Telnyx signs every webhook with the matching private key, and the worker rejects
+anything it cannot verify — that endpoint is open to the internet, so the
+signature is the whole of its authentication. **Leave this unset and no call
+event is ever processed:** calls still connect, but nothing is recorded, and
+`npm run verify-telnyx` is where that shows up.
 
 ### 4. Enable outbound calling
 
@@ -84,24 +100,20 @@ You do not need to be a developer to do this. Follow it exactly.
 
 Without this step calls fail instantly with a billing error.
 
-### 5. Install the tunnel
-
-Telnyx has to reach your laptop over the public internet to report that a call
-was answered. `cloudflared` does that without you configuring a router.
+### 5. Check the whole configuration
 
 ```bash
-brew install cloudflared
+npm run verify-telnyx
 ```
 
-Then, in a second terminal alongside `npm run dev`:
+Prints a pass/fail table covering the balance, the connection, the webhook URL
+and signing key, the outbound profile, and your numbers — with the fix named for
+anything that fails. Run it whenever calling behaves oddly; several of these
+settings fail *silently*, which is exactly why the check exists.
 
-```bash
-npm run tunnel
-```
-
-It prints a `https://something.trycloudflare.com` URL, writes it to
-`.env.local`, and registers it with Telnyx automatically. **The URL changes
-every run**, which is why the script re-registers it each time.
+**There is no tunnel step any more.** Telnyx delivers call events to the
+deployed worker, which registers its own address on boot. See "Webhook
+delivery" in the root `CLAUDE.md`.
 
 ### 6. Buy your first number
 
@@ -114,25 +126,29 @@ noticeably higher answer rates than an out-of-state one.
 
 ---
 
-## Why the webhook does not drive auto-advance
+## What drives auto-advance — and why that is changing
 
-The obvious design is "Telnyx webhook says answered → app reacts." This app
-does not do that, deliberately.
+**Today (single-line):** browser SDK events drive the dialer loop. The WebRTC
+SDK reports `active` and `hangup` locally with no network round trip, and the
+one thing here with a hard latency budget is pausing Spotify within 300ms of the
+prospect answering (see `integrations/audio`). A webhook round trip costs
+hundreds of milliseconds — invisible for reporting, audible for that.
 
-The browser's WebRTC SDK reports `active` and `hangup` **locally**, with no
-network round trip. A webhook has to travel Telnyx → cloudflared → localhost,
-which adds hundreds of milliseconds. That is invisible for reporting and very
-audible for the one thing that has a hard latency budget: pausing Spotify
-within 300ms of the prospect answering (see `integrations/audio`).
+**Where §2 takes it:** conference-anchored dialing moves the legs server-side,
+so webhooks become authoritative for leg state and hang-up. That spends the
+latency this design was avoiding. It is still the right trade, because a browser
+cannot hold three ringing legs and cannot run AMD before deciding what reaches
+the operator's ears — and a hang-up button driven by browser line state is
+exactly what left multi-line with no working hang-up at all.
 
-So:
+Until then: browser events drive the loop; the webhook supplies server-side
+truth for call records, powers Call Control features like voicemail drop, and
+handles inbound.
 
-- **Browser SDK events** drive the dialer loop, auto-advance, and audio.
-- **The webhook** supplies server-side truth for call records, powers Call
-  Control features like voicemail drop, and handles inbound calls.
-
-A missing or stale webhook therefore degrades *reporting*, not *dialing*. The
-Settings page words it that way rather than claiming the dialer is broken.
+> **Do not re-add a "no webhook URL" precheck that blocks dialing.** That check
+> existed, it read an environment variable rather than testing anything, and it
+> produced a false "cannot dial" state on a deployment that was working fine.
+> Settings tests delivery live instead.
 
 ## What is already provisioned on this machine
 
@@ -182,19 +198,23 @@ connection.
 > a "Low inbound audio" warning. This cost a full debugging session once
 > already. Save the number to your contacts before testing.
 
-**4. A real call to your own cell** ← the one that matters
-1. Both `npm run dev` and `npm run tunnel` running.
+**4. Call events are arriving**
+Settings → Phone Numbers → **Test delivery**. Green within ten seconds. If it
+fails, run `npm run verify-telnyx` — the registered URL and the signing key are
+the two things that break this, and the table names which.
+
+**5. A real call to your own cell** ← the one that matters
+1. `npm run dev` running.
 2. Import a one-row spreadsheet with your own mobile number.
 3. Start a dial session. Your phone should ring.
 4. Answer it. Talk. Confirm you hear yourself both directions.
 5. Hang up from your cell.
 6. Confirm the app noticed the hangup and advanced to the next lead on its own.
 
-If step 6 fails but 1–5 worked, the tunnel is not delivering webhooks. Check
-that `npm run tunnel` is still running and that `PUBLIC_WEBHOOK_URL` in
-`.env.local` matches the URL it printed.
+If the call worked but no record appeared afterwards, that is webhook delivery,
+not dialing — go back to step 4.
 
-**5. Caller ID rotation**
+**6. Caller ID rotation**
 Own numbers in two different area codes, then dial a lead whose area code
 matches one of them. The Dial Controls region should show that matching number
 as the caller ID being used.

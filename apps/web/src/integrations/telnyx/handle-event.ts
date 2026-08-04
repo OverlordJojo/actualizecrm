@@ -1,4 +1,3 @@
-import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import {
   startRecording,
@@ -19,26 +18,19 @@ import {
   type BurstState,
 } from '@/integrations/telnyx/burst';
 
-export const runtime = 'nodejs';
-export const dynamic = 'force-dynamic';
-
 /**
- * Telnyx call event receiver.
+ * App-side handling for the Telnyx call events that need something only the app
+ * has: R2 presigning for voicemail playback, and the extraction pipeline.
  *
- * Note on architecture: this webhook is **not** what drives the dialer's
- * auto-advance. The browser's WebRTC SDK reports `active` and `hangup`
- * locally, with no network round trip, which is what lets the music pause
- * within 300ms of answer (see integrations/audio). Routing that through
- * cloudflared would add hundreds of milliseconds of latency to the one
- * interaction where latency is audible.
+ * **This is no longer an HTTP endpoint.** Telnyx now delivers to the worker
+ * (§1.2), which verifies the ed25519 signature, deduplicates on the event id
+ * and processes off a queue. Everything the worker can do with Postgres alone
+ * it does there; what is left arrives here through `/api/telnyx/relay`,
+ * authenticated with the shared secret.
  *
- * What this webhook is for:
- *   - server-side truth for call records (duration, hangup cause)
- *   - Call Control features like voicemail drop, which are issued server-side
- *   - inbound calls, which the browser never initiated
- *
- * So a missing webhook degrades reporting, not dialing. The Settings page says
- * as much rather than claiming the dialer is broken.
+ * The events that still land here are the ones tied to app-owned credentials:
+ * bulk voicemail drops, recording archival, and the multi-line burst engine
+ * that §2 replaces with conference-anchored dialing.
  */
 
 interface TelnyxEvent {
@@ -74,22 +66,19 @@ function voicemailDropState(raw?: string | null): VoicemailDropState | null {
   return state?.k === 'vmdrop' ? (state as unknown as VoicemailDropState) : null;
 }
 
-export async function POST(request: Request) {
-  let body: TelnyxEvent;
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ received: true });
-  }
+export interface HandledEvent {
+  handled: boolean;
+  eventType?: string;
+  note?: string;
+}
 
+export async function handleTelnyxEvent(body: TelnyxEvent): Promise<HandledEvent> {
   const eventType = body.data?.event_type;
   const p = body.data?.payload ?? {};
   const callControlId = p.call_control_id;
 
   if (!eventType || !callControlId) {
-    // Always 200 — Telnyx retries non-2xx, and a malformed event we cannot
-    // act on should not turn into a retry storm.
-    return NextResponse.json({ received: true });
+    return { handled: false, note: 'no event type or call_control_id' };
   }
 
   const drop = voicemailDropState(p.client_state);
@@ -315,11 +304,14 @@ export async function POST(request: Request) {
         break;
     }
   } catch (err) {
-    // Never let a database hiccup turn into a Telnyx retry loop.
-    console.error('[telnyx webhook]', eventType, err);
+    // Rethrow rather than swallow. This runs on the worker's queue now, not in
+    // Telnyx's request path, so a failure can be retried properly instead of
+    // being logged and lost — which is what the old always-200 shape forced.
+    console.error('[telnyx event]', eventType, err);
+    throw err;
   }
 
-  return NextResponse.json({ received: true });
+  return { handled: true, eventType };
 }
 
 /**

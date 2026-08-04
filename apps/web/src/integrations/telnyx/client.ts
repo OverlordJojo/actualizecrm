@@ -186,6 +186,10 @@ export interface Connection {
   connection_name: string;
   active: boolean;
   record_type: string;
+  /// Where Telnyx currently sends events for this connection. The worker keeps
+  /// this pointed at itself on every boot (§1.2); Settings shows it so a
+  /// registration that silently failed is visible rather than assumed.
+  webhook_event_url?: string | null;
 }
 
 export async function listConnections(): Promise<Connection[]> {

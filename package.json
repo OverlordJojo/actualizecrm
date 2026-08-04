@@ -11,7 +11,7 @@
     "build": "npm run build --workspace @actualizecrm/web",
     "start": "npm run start --workspace @actualizecrm/web",
     "lint": "npm run lint --workspace @actualizecrm/web",
-    "tunnel": "tsx scripts/tunnel.ts",
+    "verify-telnyx": "tsx --env-file-if-exists=.env.local scripts/verify-telnyx-config.ts",
     "worker:dev": "npm run dev --workspace @actualizecrm/worker",
     "worker:start": "npm run start --workspace @actualizecrm/worker",
     "db:generate": "npm run generate --workspace @actualizecrm/db",
@@ -21,7 +21,8 @@
     "db:seed": "tsx packages/db/prisma/seed.ts",
     "db:import-sqlite": "tsx scripts/migrate-sqlite-to-postgres.ts",
     "voice-ai": "cd services/voice-ai && ./run.sh",
-    "typecheck": "tsc --noEmit -p apps/web/tsconfig.json && tsc --noEmit -p apps/worker/tsconfig.json"
+    "//typecheck": "Both apps import the shared packages through node_modules, which resolves to their compiled dist. Build those first or typecheck reads a stale copy — or none at all on a fresh clone.",
+    "typecheck": "npm run build --workspace @actualizecrm/db && npm run build --workspace @actualizecrm/telephony && tsc --noEmit -p apps/web/tsconfig.json && tsc --noEmit -p apps/worker/tsconfig.json"
   },
   "devDependencies": {
     "tsx": "^4.19.2",

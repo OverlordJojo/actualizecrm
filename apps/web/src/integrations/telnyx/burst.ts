@@ -1,6 +1,6 @@
 import { db } from '@/lib/db';
 import { getSetting, asNumber } from '@/lib/settings';
-import { appBaseUrl } from '@/lib/base-url';
+import { telnyxWebhookUrl } from '@/lib/worker';
 import {
   originate,
   speak,
@@ -99,16 +99,23 @@ export interface BurstLeg {
  */
 export async function startBurst(
   contactIds: string[],
-  request: Request,
 ): Promise<{ burstId: string; legs: BurstLeg[]; allowedLines: number }> {
   const connectionId = process.env.TELNYX_CONNECTION_ID;
   if (!connectionId) throw new Error('TELNYX_CONNECTION_ID is not set.');
+
+  // Events for these legs go to the worker, not back here (§1.2). Pointing them
+  // at the app would send them to a route that no longer exists.
+  const webhookUrl = telnyxWebhookUrl();
+  if (!webhookUrl) {
+    throw new Error(
+      'WORKER_URL is not set, so Telnyx has nowhere to report what these calls do.',
+    );
+  }
 
   const allowed = await allowedLinesNow();
   const wanted = contactIds.slice(0, allowed);
 
   const burstId = crypto.randomUUID();
-  const webhookUrl = `${appBaseUrl(request)}/api/telnyx/webhook`;
   const legs: BurstLeg[] = [];
   const usedNumbers = new Set<string>();
 

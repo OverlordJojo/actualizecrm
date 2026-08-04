@@ -73,11 +73,11 @@ around. The app surfaces this in Settings rather than failing quietly.
      `redirect_uri: Not matching configuration` on an otherwise blank
      page, which is the single most common setup failure.
 
-     > Do **not** use the cloudflared tunnel here. Quick tunnels get a
-     > new hostname on every restart, so the dashboard entry goes stale
-     > the moment the tunnel bounces. The loopback address is registered
-     > once and then forgotten. The tunnel is only for Telnyx webhooks,
-     > which re-register automatically via `npm run tunnel`.
+     > Register the loopback address once and forget it. Anything with a
+     > hostname that can change — the cloudflared tunnel this project used
+     > to run, a preview deployment URL — goes stale the moment it moves,
+     > and Spotify fails with the error above rather than anything that
+     > names the real cause.
 
 4. Click **Save**.
 5. Open the app → **Settings**. Copy the **Client ID** into `.env.local` as

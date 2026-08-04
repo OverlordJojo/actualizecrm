@@ -49,7 +49,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const burst = await startBurst(parsed.data.contactIds, request);
+    const burst = await startBurst(parsed.data.contactIds);
     return NextResponse.json({ mode: 'burst', ...burst, governor });
   } catch (err) {
     return NextResponse.json(

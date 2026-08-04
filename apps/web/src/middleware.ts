@@ -4,18 +4,23 @@ import { SESSION_COOKIE, verifySession } from '@/lib/session';
 /**
  * The single-operator gate.
  *
- * Everything is private except the handful of paths below. The important one
- * is the Telnyx webhook: Telnyx cannot log in, and gating it would break call
- * records, voicemail drops and inbound calls in a way that looks like a
- * telephony fault rather than an auth change. It stays open and is instead
- * treated as untrusted input by its handler.
+ * Everything is private except the handful of paths below, and every exception
+ * carries its own authentication — an unauthenticated hole would be worse than
+ * no gate, because it would look closed.
+ *
+ * Telnyx used to be the awkward case: it cannot log in, so `/api/telnyx/webhook`
+ * had to stay open to the public internet. §1 moved that endpoint to the worker,
+ * where it authenticates each delivery by ed25519 signature. Nothing on the app
+ * is now reachable by an unauthenticated stranger — what the worker calls here
+ * it calls with the shared secret.
  */
 const PUBLIC_PATHS = [
   '/login',
   '/api/auth/login',
   '/api/auth/logout',
-  // Telnyx posts call events here. Must stay reachable without a session.
-  '/api/telnyx/webhook',
+  // The worker hands over the call events that need R2 or the extraction
+  // pipeline. It presents the shared secret, which the route checks itself.
+  '/api/telnyx/relay',
   // The worker calls this every 15 minutes with the shared secret; there is no
   // operator at a browser when it runs. The route checks the secret itself.
   '/api/calendar/reconcile',

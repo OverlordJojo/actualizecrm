@@ -14,6 +14,10 @@ import { sendSms } from './lib/sms';
 import { reconcileCalendar } from './jobs/calendar';
 import { runDailyBrief } from './jobs/brief';
 import { sweepHeldCalls } from './jobs/sweep';
+import {
+  processTelnyxEvent,
+  type TelnyxEventPayload,
+} from './jobs/telnyx-event';
 
 /**
  * What the worker actually does with a job.
@@ -50,6 +54,13 @@ export function needsIdempotencyClaim(jobKey: string, type?: string): boolean {
   // run row for the same automation and make the run log lie about how many
   // times it fired.
   if (type === 'automation.execute') return false;
+
+  // Call events are already deduplicated on Telnyx's event id, in Redis, before
+  // they ever reach the queue (§1.2). A second ledger would add nothing except
+  // an `AutomationRun` row per webhook — thousands a day, burying every real
+  // automation in the run log.
+  if (type === 'telnyx.event') return false;
+
   return !jobKey.startsWith('repeat:');
 }
 
@@ -87,6 +98,14 @@ export async function processJob(job: ProcessableJob): Promise<unknown> {
     }
     lastSuccess[type] = new Date().toISOString();
     return swept;
+  }
+
+  // Call events are high-volume and already logged by the receiver. Giving each
+  // one the standard job banner would make the log unreadable during a session.
+  if (type === 'telnyx.event') {
+    const result = await processTelnyxEvent(payload as unknown as TelnyxEventPayload);
+    lastSuccess[type] = new Date().toISOString();
+    return result;
   }
 
   console.log(`[job] ${type} key=${jobKey} attempt=${(job.attemptsMade ?? 0) + 1}`);

@@ -51,13 +51,15 @@ it — see the call-survival rule below.
 ```
 actualizecrm/
 ├── packages/
-│   └── db/          ★  Prisma schema + client, shared by both services
+│   ├── db/          ★  Prisma schema + client, shared by both services
+│   └── telephony/      Telnyx REST + webhook signature, shared by both
 ├── apps/
-│   ├── web/            Next.js dialer — runs locally only
-│   └── worker/      ★  Railway service — automations, sweeps, rollups
+│   ├── web/            Next.js dialer — deployed to Vercel
+│   └── worker/      ★  Railway service — automations, sweeps, rollups, and
+│                       the Telnyx webhook
 ├── services/
 │   └── voice-ai/    ★  Local Python sidecar — Whisper STT + Ollama extraction
-├── scripts/            tunnel, SQLite→Postgres import
+├── scripts/            Telnyx config verifier, SQLite→Postgres import
 └── data/               local audio, recordings, v1 SQLite backup (gitignored)
 ```
 
@@ -70,10 +72,10 @@ their own `CLAUDE.md`: `telnyx`, `audio`, `email`, `messaging`, `import`.
 ## Run commands
 
 ```bash
-npm run dev          # Next.js on :3000 (the dialer)
-npm run tunnel       # cloudflared + register the Telnyx webhook
-npm run voice-ai     # local Whisper/Ollama sidecar on :8787
-npm run worker:dev   # worker locally (normally it runs on Railway)
+npm run dev            # Next.js on :3000 (the dialer)
+npm run voice-ai       # local Whisper/Ollama sidecar on :8787
+npm run worker:dev     # worker locally (normally it runs on Railway)
+npm run verify-telnyx  # pass/fail table for the Telnyx portal config (§0.4)
 
 npm run db:migrate       # apply schema changes
 npm run db:seed          # default pipeline and stages
@@ -82,12 +84,13 @@ npm run db:studio        # browse data
 
 npm run typecheck    # both services
 
-# The worker compiles against packages/db's *built* output, so `worker:dev`
-# and its build script build the shared package first. Do not remove that.
+# Both apps compile against packages/db and packages/telephony's *built*
+# output, so every build and typecheck script builds those first. Do not
+# remove that.
 ```
 
-A full live session needs **`npm run dev` + `npm run tunnel`**, plus
-`npm run voice-ai` if you want transcription.
+**There is no tunnel.** Call events go to the deployed worker, which registers
+its own address with Telnyx on boot — see "Webhook delivery" below.
 
 ---
 
@@ -101,8 +104,9 @@ folder's `CLAUDE.md`.
 | `DATABASE_URL` | `packages/db` — Postgres. **Public** URL locally, private on Railway |
 | `REDIS_URL` | `apps/worker` — BullMQ backing store |
 | `WORKER_SHARED_SECRET` | `apps/worker` — auth for `POST /jobs/enqueue` |
-| `TELNYX_API_KEY` | `apps/web/src/integrations/telnyx` |
-| `TELNYX_CONNECTION_ID` | `apps/web/src/integrations/telnyx` |
+| `TELNYX_API_KEY` | `apps/web/src/integrations/telnyx` — **also required on Railway** |
+| `TELNYX_CONNECTION_ID` | `apps/web/src/integrations/telnyx` — **also required on Railway** |
+| `TELNYX_PUBLIC_KEY` | `apps/worker` — verifies webhook signatures. Not the API key |
 | `TELNYX_MESSAGING_PROFILE` | `apps/web/src/integrations/messaging` |
 | `SPOTIFY_CLIENT_ID` / `_SECRET` | `apps/web/src/integrations/audio` |
 | `GOOGLE_CLIENT_ID` / `_SECRET` | `apps/web` calendar — OAuth, `calendar.events` |
@@ -111,9 +115,9 @@ folder's `CLAUDE.md`.
 | `RESEND_API_KEY` | `apps/worker` — optional fallback |
 | `WHISPER_MODEL` `OLLAMA_URL` `OLLAMA_MODEL` | `services/voice-ai` |
 | `AUTH_USERNAME` / `AUTH_PASSWORD_HASH` / `AUTH_SECRET` | `apps/web` — the sign-in gate |
-| `WORKER_URL` | `apps/web` — optional; only shortens the wait on "run this now" |
-| `APP_URL` | `apps/worker` — where Telnyx sends events for worker-originated calls |
-| `PUBLIC_WEBHOOK_URL` | written by `scripts/tunnel.ts` — never edit by hand |
+| `WORKER_URL` | `apps/web` — **required**; the app derives the webhook URL from it and runs the delivery test through it |
+| `APP_URL` | `apps/worker` — where the worker relays events that need R2 or the AI pipeline |
+| `WEBHOOK_BASE_URL` | `apps/worker` — local override only. On Railway this comes from `RAILWAY_PUBLIC_DOMAIN` |
 
 `.env.local` holds everything. `.env` holds only `DATABASE_URL`, because the
 Prisma CLI does not read `.env.local`. `packages/db/.env` is a **symlink** to
@@ -128,6 +132,57 @@ laptop needs the public one (`*.proxy.rlwy.net`), found under the service's
 
 `P1001: Can't reach database server at postgres.railway.internal:5432` means
 you have the internal URL locally. It is the most common setup mistake here.
+
+---
+
+## Webhook delivery
+
+Telnyx posts call events to **the worker**, at
+`https://{RAILWAY_PUBLIC_DOMAIN}/api/telnyx/webhook`. Not to the web app.
+
+v1 tunnelled to the laptop with cloudflared, which handed out a fresh hostname
+on every run. That is why Settings grew a check for a stored tunnel URL — and
+why that check ended up blocking dialing outright, since a deployed app has no
+tunnel and never will. Both are gone.
+
+Four properties, each load-bearing:
+
+- **Self-registering.** The worker PATCHes the connection's `webhook_event_url`
+  to its own address on every boot. A redeploy needs no portal clicking. If the
+  registered URL is wrong, the worker either has not booted since the deploy or
+  registration failed — its log says which, and `npm run verify-telnyx` checks
+  it from outside.
+- **Signature-verified.** Every delivery is checked against
+  `TELNYX_PUBLIC_KEY` (ed25519, over `${timestamp}|${rawBody}`), and timestamps
+  older than five minutes are refused. **With that key unset, every event is
+  rejected and nothing is recorded.** Verify the raw bytes, never a
+  re-serialized object — JSON round-tripping changes key order and the
+  signature is over bytes.
+- **Idempotent.** Claimed in Redis on Telnyx's event `id`, 24h TTL, `SET NX`.
+  Telnyx retries on anything non-2xx and on its own schedule, so redelivery is
+  normal. Without this a retried `call.answered` counts a second connect — a
+  large share of the analytics double-counting.
+- **Asynchronous.** The endpoint answers 200 and hands the event to BullMQ.
+  Telnyx times out fast and a slow handler becomes a retry storm.
+
+The worker does everything Postgres alone can do. Events needing R2 presigning
+or the AI pipeline are relayed to the app at `/api/telnyx/relay`, authenticated
+with `WORKER_SHARED_SECRET`. That seam is temporary — §5 moves the audio path
+onto the worker, because media forking needs a persistent process.
+
+Because Telnyx no longer calls the app, **nothing on the app is publicly
+reachable any more.** The middleware exemption that used to exist for
+`/api/telnyx/webhook` is gone.
+
+### Proving it works
+
+Settings → Phone Numbers → **Test delivery**. It asks Telnyx to place a
+few-second call between two of the operator's own numbers and waits up to ten
+seconds for the resulting event to arrive back through the verifying receiver.
+It goes green on receipt and on nothing else — a configured URL proves nothing,
+which is precisely how the old check managed to be both green and wrong.
+
+It never dials a person. Keep it that way.
 
 ---
 

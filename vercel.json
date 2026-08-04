@@ -2,6 +2,6 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
   "installCommand": "npm install --workspaces --include-workspace-root --no-audit --no-fund",
-  "buildCommand": "npm run build --workspace @actualizecrm/db && npm run build --workspace @actualizecrm/web",
+  "buildCommand": "npm run build --workspace @actualizecrm/db && npm run build --workspace @actualizecrm/telephony && npm run build --workspace @actualizecrm/web",
   "outputDirectory": "apps/web/.next"
 }

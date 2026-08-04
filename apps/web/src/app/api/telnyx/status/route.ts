@@ -5,6 +5,7 @@ import {
   listOutboundVoiceProfiles,
   TelnyxError,
 } from '@/integrations/telnyx/client';
+import { telnyxWebhookUrl } from '@/lib/worker';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -54,11 +55,12 @@ export async function GET() {
         'No outbound voice profile — Telnyx rejects outbound calls without one.',
       );
     }
-    if (!process.env.PUBLIC_WEBHOOK_URL) {
-      problems.push(
-        'No webhook URL yet — run `npm run tunnel` or the dialer will not know when calls are answered.',
-      );
-    }
+
+    // Deliberately *not* a webhook check. The old one asked whether a config
+    // value was non-empty, which proved nothing and — because it was listed as
+    // a problem — blocked dialing whenever the tunnel was not running (§1.1).
+    // Webhook delivery is now proven by the live round-trip test below, which
+    // is the only thing that can actually establish it.
 
     return NextResponse.json({
       ok: problems.length === 0,
@@ -76,7 +78,10 @@ export async function GET() {
         name: p.name,
         enabled: p.enabled,
       })),
-      webhookUrl: process.env.PUBLIC_WEBHOOK_URL ?? null,
+      // Where events are expected to land, for display only. Whether they
+      // actually arrive is what the round-trip test answers.
+      webhookUrl: telnyxWebhookUrl(),
+      registeredWebhookUrl: connection?.webhook_event_url ?? null,
       problems,
     });
   } catch (err) {

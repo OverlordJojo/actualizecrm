@@ -6,13 +6,14 @@
   "scripts": {
     "//env": "Unlike Next.js, a plain Node process does not read .env.local. --env-file-if-exists keeps this working on Railway, where the file is absent and variables come from the platform.",
     "//loader": "Use the tsx binary rather than `node --import tsx/esm`. The latter loads this CommonJS-configured package through the ESM pipeline, and the shared db export resolves to undefined at module scope in some files but not others \u2014 a genuinely confusing failure.",
-    "dev": "tsc -p ../../packages/db/tsconfig.json && tsx --env-file-if-exists=../../.env.local src/index.ts",
-    "build": "tsc -p ../../packages/db/tsconfig.json && tsc -p tsconfig.json",
+    "dev": "tsc -p ../../packages/db/tsconfig.json && tsc -p ../../packages/telephony/tsconfig.json && tsx --env-file-if-exists=../../.env.local src/index.ts",
+    "build": "tsc -p ../../packages/db/tsconfig.json && tsc -p ../../packages/telephony/tsconfig.json && tsc -p tsconfig.json",
     "start": "node --env-file-if-exists=../../.env.local dist/index.js",
-    "//db": "The worker imports @actualizecrm/db through node_modules, which resolves to its compiled dist \u2014 so the shared package has to be built before the worker is. Leaving this out means the worker silently compiles against a stale copy of the schema and helpers."
+    "//db": "The worker imports @actualizecrm/db and @actualizecrm/telephony through node_modules, which resolve to their compiled dist \u2014 so both shared packages have to be built before the worker is. Leaving this out means the worker silently compiles against a stale copy of the schema and helpers."
   },
   "dependencies": {
     "@actualizecrm/db": "*",
+    "@actualizecrm/telephony": "*",
     "bullmq": "^5.34.2",
     "ioredis": "^5.4.1",
     "nodemailer": "^6.9.16",

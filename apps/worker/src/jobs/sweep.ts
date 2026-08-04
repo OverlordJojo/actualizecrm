@@ -18,10 +18,7 @@ export interface SweepResult {
 }
 
 function appUrl(): string | null {
-  const base =
-    process.env.APP_URL ??
-    process.env.NEXT_PUBLIC_APP_URL ??
-    process.env.PUBLIC_WEBHOOK_URL;
+  const base = process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL;
   return base ? base.replace(/\/$/, '') : null;
 }
 

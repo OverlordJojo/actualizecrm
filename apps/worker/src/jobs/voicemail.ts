@@ -1,4 +1,5 @@
 import { db } from '@actualizecrm/db';
+import { requireWebhookUrl } from '@actualizecrm/telephony';
 
 /**
  * Bulk voicemail drop — the origination half.
@@ -33,24 +34,13 @@ export interface VoicemailDropResult {
 /**
  * Where Telnyx sends events for these calls.
  *
- * Per-call rather than the connection's configured URL, because the connection
- * webhook points at whatever cloudflared tunnel was last opened and that URL is
- * dead the moment the operator closes their laptop — which is the exact
- * situation this job exists to work in.
+ * Set explicitly per call rather than relying on the connection's configured
+ * URL. The two should agree — the worker registers its own address at boot
+ * (§1.2) — but a drop queued overnight must not depend on a connection setting
+ * somebody changed in the portal in the meantime.
  */
-function appWebhookUrl(): string {
-  const base =
-    process.env.APP_URL ??
-    process.env.NEXT_PUBLIC_APP_URL ??
-    process.env.PUBLIC_WEBHOOK_URL;
-
-  if (!base) {
-    throw new Error(
-      'APP_URL is not set. The worker needs the deployed app URL to receive ' +
-        'Call Control events for bulk voicemail drops.',
-    );
-  }
-  return `${base.replace(/\/$/, '')}/api/telnyx/webhook`;
+function dropWebhookUrl(): string {
+  return requireWebhookUrl();
 }
 
 /// US area code straight off the E.164 string. The worker has no phone-number
@@ -130,7 +120,7 @@ export async function runVoicemailDrop(
       connection_id: connectionId,
       to: contact.phone,
       from: from.e164,
-      webhook_url: appWebhookUrl(),
+      webhook_url: dropWebhookUrl(),
       webhook_url_method: 'POST',
       // Premium AMD decides whether this reaches a machine or a person, and
       // the app's webhook branches on the verdict.

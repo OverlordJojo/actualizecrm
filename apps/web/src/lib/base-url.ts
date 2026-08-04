@@ -1,9 +1,13 @@
 /**
  * The app's own base URL, for building redirects back into the UI.
  *
- * Derived from the incoming request rather than hardcoded, so an operator who
- * reached the app through the cloudflared tunnel is sent back to the tunnel
- * and not bounced to a localhost URL their browser session did not come from.
+ * Derived from the incoming request rather than hardcoded, so an operator is
+ * sent back to whatever origin they actually signed in on — the deployed
+ * hostname, a preview URL, or localhost — rather than being bounced somewhere
+ * their session cookie does not exist.
+ *
+ * This is *not* where Telnyx sends call events. That is the worker's own
+ * address; see `telnyxWebhookUrl()` in `@/lib/worker`.
  */
 export function appBaseUrl(request: Request): string {
   const explicit = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL;

@@ -33,7 +33,16 @@ interface TelnyxStatus {
   connection?: { id: string; name: string; active: boolean } | null;
   outboundProfiles?: { id: string; name: string; enabled: boolean }[];
   webhookUrl?: string | null;
+  registeredWebhookUrl?: string | null;
   problems: string[];
+}
+
+interface WebhookTest {
+  ok: boolean;
+  roundTripMs?: number;
+  eventType?: string;
+  webhookUrl?: string;
+  error?: string;
 }
 
 const US_STATES = [
@@ -57,6 +66,9 @@ export function PhoneNumbers() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  const [webhookTest, setWebhookTest] = useState<WebhookTest | null>(null);
+  const [testingWebhook, setTestingWebhook] = useState(false);
+
   const loadStatus = useCallback(async () => {
     const res = await fetch('/api/telnyx/status');
     setStatus(await res.json());
@@ -71,6 +83,31 @@ export function PhoneNumbers() {
     loadStatus();
     loadOwned();
   }, [loadStatus, loadOwned]);
+
+  /**
+   * Proves Telnyx can reach us right now (§1.2).
+   *
+   * A brief call between two of the operator's own numbers, hung up the moment
+   * its first event arrives. It never rings a person — and it is the only kind
+   * of check that means anything, because the URL being configured says nothing
+   * about whether events are getting through.
+   */
+  async function testWebhook() {
+    setTestingWebhook(true);
+    setWebhookTest(null);
+    try {
+      const res = await fetch('/api/telnyx/test-webhook', { method: 'POST' });
+      setWebhookTest(await res.json());
+    } catch (e) {
+      setWebhookTest({
+        ok: false,
+        error: e instanceof Error ? e.message : 'The test could not be run.',
+      });
+    } finally {
+      setTestingWebhook(false);
+      loadStatus();
+    }
+  }
 
   async function search() {
     setSearching(true);
@@ -217,6 +254,57 @@ export function PhoneNumbers() {
           )}
         </div>
       )}
+
+      {/* Webhook delivery (§1.2). Not a configuration readout — a live test. */}
+      <div className="rounded-lg border border-ink-800 bg-ink-900/60 px-3 py-2.5">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-medium text-ink-200">Call event delivery</p>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-ink-400">
+              Telnyx reports what your calls did — answered, hung up, reached a
+              machine. The test places a few-second call between two of your own
+              numbers and hangs up as soon as the report arrives. It never rings
+              anyone.
+            </p>
+          </div>
+          <button
+            className="btn-ghost shrink-0 py-1 text-xs"
+            onClick={testWebhook}
+            disabled={testingWebhook}
+          >
+            {testingWebhook ? 'Testing…' : 'Test delivery'}
+          </button>
+        </div>
+
+        {status?.registeredWebhookUrl && (
+          <p className="mt-1.5 truncate font-mono text-[10px] text-ink-500">
+            {status.registeredWebhookUrl}
+          </p>
+        )}
+
+        {webhookTest && (
+          <div
+            className={cn(
+              'mt-2 rounded-md px-2.5 py-1.5 text-[11px] leading-relaxed',
+              webhookTest.ok
+                ? 'border border-green-900 bg-green-950/50 text-green-200'
+                : 'border border-red-900 bg-red-950/50 text-red-200',
+            )}
+          >
+            {webhookTest.ok ? (
+              <>
+                Working — Telnyx reported back in{' '}
+                <span className="font-medium tabular-nums">
+                  {((webhookTest.roundTripMs ?? 0) / 1000).toFixed(1)}s
+                </span>
+                .
+              </>
+            ) : (
+              webhookTest.error
+            )}
+          </div>
+        )}
+      </div>
 
       {error && (
         <div className="rounded-lg border border-red-900 bg-red-950/60 px-3 py-2 text-xs text-red-200">

@@ -21,6 +21,8 @@ export type JobType =
   | 'sms.send'
   | 'email.send'
   | 'voicemail.drop'
+  /// One verified Telnyx call event, processed off the hot path (§1.2).
+  | 'telnyx.event'
   /// Retires multi-line callers held past the limit (§4.4).
   | 'dialer.sweep'
   /// Moves due `ScheduledJob` rows written by the app into this queue.
