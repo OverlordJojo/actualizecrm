@@ -72,6 +72,31 @@ export function makeWorker(processor: Processor<JobData>) {
   });
 }
 
+/**
+ * A `jobKey` made safe to use as a BullMQ job id.
+ *
+ * **BullMQ rejects any custom job id containing `:`** — it reserves the colon
+ * for its own Redis key structure and throws `Custom Id cannot contain :`.
+ * Every job key in this codebase was namespaced with colons (`repeat:`,
+ * `telnyx:`, `auto:`, `vmdrop:`, `run:`), so *every* enqueue was failing.
+ *
+ * The damage was quiet and total. Repeatable jobs died on their first tick and
+ * filled the dead-letter table with thousands of identical rows; and once the
+ * Telnyx webhook started queueing events, every call event was accepted,
+ * verified, deduplicated — and then dropped on the floor. The dialer's symptom
+ * was a session that started, answered the operator's leg, and then did nothing
+ * at all, because the `call.answered` that builds the conference never arrived
+ * at a processor.
+ *
+ * Converted here rather than at each call site so a new job type cannot
+ * reintroduce it. `jobKey` itself is left alone: it is the idempotency ledger
+ * key, matched against existing `AutomationRun` rows, and rewriting it would
+ * orphan every one of them.
+ */
+export function toJobId(jobKey: string): string {
+  return jobKey.replace(/:/g, '-');
+}
+
 export async function enqueue(
   data: JobData,
   opts: JobsOptions = {},
@@ -79,7 +104,7 @@ export async function enqueue(
   await queue.add(data.type, data, {
     // BullMQ dedupes on job id, which gives us a second layer of idempotency
     // on top of the AutomationRun check inside the processor.
-    jobId: data.jobKey,
+    jobId: toJobId(data.jobKey),
     ...opts,
   });
 }
@@ -107,7 +132,7 @@ export async function scheduleRepeatables(): Promise<void> {
       { type: r.type, jobKey: `repeat:${r.type}` },
       {
         repeat: { pattern: r.pattern, tz: TZ },
-        jobId: `repeat:${r.type}`,
+        jobId: toJobId(`repeat:${r.type}`),
       },
     );
     console.log(`[queue] scheduled ${r.type} — ${r.note}`);
@@ -119,7 +144,7 @@ export async function scheduleRepeatables(): Promise<void> {
   await queue.add(
     'jobs.drain',
     { type: 'jobs.drain', jobKey: 'repeat:jobs.drain' },
-    { repeat: { every: 20_000 }, jobId: 'repeat:jobs.drain' },
+    { repeat: { every: 20_000 }, jobId: toJobId('repeat:jobs.drain') },
   );
   console.log('[queue] scheduled jobs.drain — every 20s');
 
@@ -129,7 +154,7 @@ export async function scheduleRepeatables(): Promise<void> {
   await queue.add(
     'dialer.sweep',
     { type: 'dialer.sweep', jobKey: 'repeat:dialer.sweep' },
-    { repeat: { every: 10_000 }, jobId: 'repeat:dialer.sweep' },
+    { repeat: { every: 10_000 }, jobId: toJobId('repeat:dialer.sweep') },
   );
   console.log('[queue] scheduled dialer.sweep — every 10s');
 }
