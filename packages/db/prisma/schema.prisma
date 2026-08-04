@@ -453,6 +453,14 @@ model DialSession {
   /// and held open until the session ends.
   operatorLegId String?
 
+  /// The prospect currently in the conference with the operator.
+  ///
+  /// Also the race lock. When several legs in a burst answer in the same
+  /// instant, the winner is whichever one moves this field from null — a single
+  /// conditional update, so two legs cannot both believe they won. The losers
+  /// fall through to the hold queue, which is exactly the queued-owner rule.
+  activeCallId String?
+
   /// Lines opened per burst, captured at session start so a mid-session change
   /// to the setting cannot make the running session inconsistent.
   linesPerBurst Int @default(1)

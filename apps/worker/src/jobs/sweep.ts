@@ -11,33 +11,28 @@
  * under a legal cap.
  */
 
+import { sweepExpiredHolds } from '@actualizecrm/dialer';
+
 export interface SweepResult {
-  held?: number;
   abandoned: number;
   skipped?: string;
 }
 
-function appUrl(): string | null {
-  const base = process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL;
-  return base ? base.replace(/\/$/, '') : null;
-}
-
+/**
+ * Runs the sweep here rather than asking the app to (§2).
+ *
+ * It used to POST to the app, because Call Control lived there. It does not any
+ * more, and the round trip was exactly the wrong dependency for this job: the
+ * case that strands somebody on hold is the browser being closed, crashed or
+ * offline mid-burst, and a sweep that needs the app to answer is weakest in
+ * precisely that situation.
+ */
 export async function sweepHeldCalls(): Promise<SweepResult> {
-  const base = appUrl();
-  const secret = process.env.WORKER_SHARED_SECRET;
-  if (!base || !secret) return { abandoned: 0, skipped: 'app URL or secret not set' };
-
   try {
-    const res = await fetch(`${base}/api/dialer/sweep`, {
-      method: 'POST',
-      headers: { 'x-worker-secret': secret, 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(20_000),
-    });
-    if (!res.ok) return { abandoned: 0, skipped: `sweep returned ${res.status}` };
-    return (await res.json()) as SweepResult;
+    return { abandoned: await sweepExpiredHolds() };
   } catch (err) {
     // A ten-second job must never throw into the dead-letter queue over a
-    // transient network blip; the next tick will try again.
-    return { abandoned: 0, skipped: String(err).slice(0, 80) };
+    // transient blip; the next tick will try again.
+    return { abandoned: 0, skipped: String(err).slice(0, 120) };
   }
 }

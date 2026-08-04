@@ -5,6 +5,13 @@ import {
   hangup,
   decodeClientState,
 } from '@actualizecrm/telephony';
+import {
+  sessionLegState,
+  onOperatorLegAnswered,
+  routeAmdVerdict,
+  releaseActive,
+  type SessionLegState,
+} from '@actualizecrm/dialer';
 import { relayToApp } from '../lib/app-relay';
 
 /**
@@ -89,6 +96,15 @@ export async function processTelnyxEvent(
   if (!callControlId) return { handled: false, eventType, note: 'no call_control_id' };
 
   const state = decodeClientState(p.client_state);
+
+  // Conference-anchored session legs (§2). Handled here rather than relayed:
+  // these are the events with a listener on the other end of them — a prospect
+  // sitting in silence while an AMD verdict takes an extra hop to be acted on
+  // is the cost, and it is paid in the one place the operator can hear it.
+  const leg = sessionLegState(state);
+  if (leg) {
+    return handleSessionEvent(eventType, leg, callControlId, p);
+  }
 
   if (needsApp(eventType, state)) {
     const relayed = await relayToApp(payload.body);
@@ -212,6 +228,95 @@ export async function processTelnyxEvent(
 
     default:
       return { handled: true, eventType, note: 'ignored' };
+  }
+}
+
+/**
+ * Events belonging to a conference-anchored session (§2.2).
+ *
+ * The operator's leg and a prospect's leg take completely different paths
+ * through the same event types, which is why the role is carried in
+ * `client_state` rather than inferred: an inference that guesses wrong here
+ * either drops the operator or bridges a machine.
+ */
+async function handleSessionEvent(
+  eventType: string,
+  leg: SessionLegState,
+  callControlId: string,
+  p: TelnyxCallPayload,
+): Promise<TelnyxEventResult> {
+  const { sessionId, role, callId } = leg;
+
+  if (role === 'operator') {
+    switch (eventType) {
+      case 'call.answered':
+        // The room can only be built once the operator is on the line — Telnyx
+        // creates a conference from a live leg and has no empty-conference call.
+        await onOperatorLegAnswered(sessionId, callControlId);
+        return { handled: true, eventType, note: 'conference created' };
+
+      case 'call.hangup': {
+        // The operator's leg going away ends the session, whatever the cause.
+        // Leaving prospects in a conference nobody is coming back to is the
+        // worst available outcome.
+        const { endSession } = await import('@actualizecrm/dialer');
+        await endSession(sessionId).catch(() => {});
+        return { handled: true, eventType, note: 'operator left — session ended' };
+      }
+
+      default:
+        return { handled: true, eventType, note: 'operator leg, ignored' };
+    }
+  }
+
+  if (!callId) return { handled: false, eventType, note: 'prospect leg with no call id' };
+
+  switch (eventType) {
+    // Answer alone decides nothing. AMD has not spoken yet, and bridging on
+    // answer is what puts a machine in the operator's ear.
+    case 'call.answered':
+      await db.call.updateMany({
+        where: { id: callId, answeredAt: null },
+        data: { answeredAt: new Date() },
+      });
+      return { handled: true, eventType, note: 'awaiting AMD' };
+
+    case 'call.machine.detection.ended':
+    case 'call.machine.premium.detection.ended': {
+      const routing = await routeAmdVerdict({
+        sessionId,
+        callId,
+        callControlId,
+        verdict: p.result ?? null,
+      });
+      return { handled: true, eventType, note: `amd=${p.result} → ${routing}` };
+    }
+
+    case 'call.hangup': {
+      const call = await db.call.findUnique({ where: { id: callId } });
+      if (call && !call.endedAt) {
+        const endedAt = p.end_time ? new Date(p.end_time) : new Date();
+        const startedAt = call.answeredAt ?? call.startedAt;
+        await db.call.update({
+          where: { id: callId },
+          data: {
+            status: mapHangupCause(p.hangup_cause, call.answeredAt !== null),
+            endedAt,
+            durationSec: Math.max(
+              0,
+              Math.round((endedAt.getTime() - startedAt.getTime()) / 1000),
+            ),
+          },
+        });
+      }
+      // Frees the active slot and re-mutes the operator. Idempotent, because
+      // the operator pressing Hang up and this webhook both run it.
+      await releaseActive(sessionId, callId);
+      return { handled: true, eventType, note: 'prospect leg ended' };
+    }
+
+    default:
+      return { handled: true, eventType, note: 'prospect leg, ignored' };
   }
 }
 

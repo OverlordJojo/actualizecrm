@@ -22,7 +22,7 @@
     "db:import-sqlite": "tsx scripts/migrate-sqlite-to-postgres.ts",
     "voice-ai": "cd services/voice-ai && ./run.sh",
     "//typecheck": "Both apps import the shared packages through node_modules, which resolves to their compiled dist. Build those first or typecheck reads a stale copy — or none at all on a fresh clone.",
-    "typecheck": "npm run build --workspace @actualizecrm/db && npm run build --workspace @actualizecrm/telephony && tsc --noEmit -p apps/web/tsconfig.json && tsc --noEmit -p apps/worker/tsconfig.json"
+    "typecheck": "npm run build --workspace @actualizecrm/db && npm run build --workspace @actualizecrm/telephony && npm run build --workspace @actualizecrm/dialer && tsc --noEmit -p apps/web/tsconfig.json && tsc --noEmit -p apps/worker/tsconfig.json"
   },
   "devDependencies": {
     "tsx": "^4.19.2",

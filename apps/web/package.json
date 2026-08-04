@@ -30,7 +30,8 @@
     "tailwind-merge": "^2.5.5",
     "telnyx": "^1.25.5",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
-    "zod": "^3.23.8"
+    "zod": "^3.23.8",
+    "@actualizecrm/dialer": "*"
   },
   "devDependencies": {
     "@types/node": "^20",
