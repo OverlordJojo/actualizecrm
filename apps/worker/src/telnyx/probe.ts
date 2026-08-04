@@ -5,6 +5,7 @@ import {
   encodeClientState,
   requireWebhookUrl,
   signingKeyStatus,
+  requireCallControlAppId,
 } from '@actualizecrm/telephony';
 
 /**
@@ -100,8 +101,12 @@ export async function runWebhookProbe(): Promise<ProbeResult> {
     };
   }
 
-  const connectionId = process.env.TELNYX_CONNECTION_ID;
-  if (!connectionId) return { ok: false, webhookUrl, error: 'TELNYX_CONNECTION_ID is not set.' };
+  let connectionId: string;
+  try {
+    connectionId = requireCallControlAppId();
+  } catch (err) {
+    return { ok: false, webhookUrl, error: err instanceof Error ? err.message : String(err) };
+  }
 
   // Dialing one of our own numbers is what keeps this safe to run on demand.
   const numbers = await db.phoneNumber.findMany({

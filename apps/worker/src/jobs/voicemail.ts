@@ -1,5 +1,8 @@
 import { db } from '@actualizecrm/db';
-import { requireWebhookUrl } from '@actualizecrm/telephony';
+import {
+  requireWebhookUrl,
+  requireCallControlAppId,
+} from '@actualizecrm/telephony';
 
 /**
  * Bulk voicemail drop — the origination half.
@@ -73,10 +76,10 @@ export async function runVoicemailDrop(
   payload: VoicemailDropPayload,
 ): Promise<VoicemailDropResult> {
   const apiKey = process.env.TELNYX_API_KEY;
-  const connectionId = process.env.TELNYX_CONNECTION_ID;
-  if (!apiKey || !connectionId) {
-    throw new Error('TELNYX_API_KEY and TELNYX_CONNECTION_ID must be set.');
-  }
+  if (!apiKey) throw new Error('TELNYX_API_KEY is not set.');
+  // Server-originated, so this is the Call Control Application — the credential
+  // connection is rejected with a 422 here.
+  const connectionId = requireCallControlAppId();
 
   const contact = await db.contact.findUnique({
     where: { id: payload.contactId },

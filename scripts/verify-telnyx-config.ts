@@ -279,23 +279,72 @@ async function main(): Promise<void> {
     });
   }
 
-  // --- per-call capabilities ----------------------------------------------
+  // --- the Call Control Application ---------------------------------------
   //
-  // AMD, recording, media streaming and conferences are all set per call in the
-  // API rather than being flags on the connection, so there is nothing to read
-  // back. What can be checked is that the account is on Call Control v2 at all
-  // — everything above depends on it, and a connection that is not shows up
-  // here rather than as a confusing 422 mid-call.
+  // This check used to accept any connection type and print PASS, which was
+  // worse than having no check: server-originated calls need a Call Control
+  // Application specifically, and with a credential connection every single one
+  // fails 422 at dial time. Multi-line dialing never originated a leg because of
+  // it, and the table said the configuration was fine.
 
-  record({
-    name: 'Call Control v2',
-    level: 'required',
-    ok: ['credential_connection', 'call_control_application', 'ip_connection', 'fqdn_connection'].includes(
-      connection.record_type,
-    ),
-    detail: connection.record_type,
-    fix: undefined,
-  });
+  const appId = process.env.TELNYX_CALL_CONTROL_APP_ID;
+  if (!appId) {
+    record({
+      name: 'Call Control Application',
+      level: 'required',
+      ok: false,
+      detail: 'TELNYX_CALL_CONTROL_APP_ID is not set',
+      fix:
+        'Server-originated calls (bursts, voicemail drops, the conference dialer) ' +
+        'need one. Voice → Call Control → create an application, then put its id here. ' +
+        'It is a different object from the credential connection above, and a ' +
+        'credential connection is rejected with a 422.',
+    });
+  } else {
+    try {
+      const app = (await telnyx(`/call_control_applications/${appId}`)).data;
+      record({
+        name: 'Call Control Application',
+        level: 'required',
+        ok: app.active !== false,
+        detail: `${app.application_name} (${app.id})`,
+        fix: app.active === false ? 'The application is disabled. Enable it.' : undefined,
+      });
+
+      record({
+        name: 'App webhook URL',
+        level: 'required',
+        ok: Boolean(app.webhook_event_url) && (!expected || app.webhook_event_url === expected),
+        detail: app.webhook_event_url ?? 'unset',
+        fix:
+          app.webhook_event_url && (!expected || app.webhook_event_url === expected)
+            ? undefined
+            : `Expected ${expected ?? 'the worker URL'}. The worker registers this at boot.`,
+      });
+
+      // Without an outbound profile attached, origination fails with a billing
+      // error that reads like an empty balance.
+      const attached = app.outbound?.outbound_voice_profile_id;
+      record({
+        name: 'App outbound profile',
+        level: 'required',
+        ok: Boolean(attached),
+        detail: attached ?? 'none attached',
+        fix: attached
+          ? undefined
+          : 'Attach the outbound voice profile to the Call Control Application, or ' +
+            'every outbound call is rejected with a billing error.',
+      });
+    } catch (err) {
+      record({
+        name: 'Call Control Application',
+        level: 'required',
+        ok: false,
+        detail: String(err),
+        fix: 'TELNYX_CALL_CONTROL_APP_ID does not match any application on this account.',
+      });
+    }
+  }
 
   report();
 }

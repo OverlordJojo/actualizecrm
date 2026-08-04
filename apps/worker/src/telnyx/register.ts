@@ -1,4 +1,9 @@
-import { registerWebhookUrl, webhookUrl } from '@actualizecrm/telephony';
+import {
+  registerWebhookUrl,
+  webhookUrl,
+  callControlAppId,
+  credentialConnectionId,
+} from '@actualizecrm/telephony';
 
 /**
  * Webhook self-registration on boot (§1.2).
@@ -28,10 +33,43 @@ export interface RegistrationRecord {
 /// is answerable without reading logs.
 export let lastRegistration: RegistrationRecord | null = null;
 
+/**
+ * Registers on **both** connections, because events arrive on both.
+ *
+ * Outbound legs are originated from the Call Control Application, so their
+ * events come from it. Inbound calls route to the credential connection the
+ * numbers are assigned to, so theirs come from that. Registering only one leaves
+ * half the call events going nowhere — and the half that breaks is whichever one
+ * nobody tested.
+ */
 export async function registerWebhook(): Promise<RegistrationRecord> {
+  const results: RegistrationRecord[] = [];
+
+  for (const id of [callControlAppId(), credentialConnectionId()]) {
+    if (id) results.push(await registerOne(id));
+  }
+
+  if (results.length === 0) {
+    lastRegistration = {
+      at: new Date().toISOString(),
+      ok: false,
+      error:
+        'Neither TELNYX_CALL_CONTROL_APP_ID nor TELNYX_CONNECTION_ID is set, so ' +
+        'Telnyx has nowhere to send call events.',
+    };
+    console.warn(`[telnyx] ${lastRegistration.error}`);
+    return lastRegistration;
+  }
+
+  // The Call Control App is the one that matters for dialing, so it fronts the
+  // health readout; a credential-connection failure is logged either way.
+  lastRegistration = results[0];
+  return lastRegistration;
+}
+
+async function registerOne(connectionId: string): Promise<RegistrationRecord> {
   const at = new Date().toISOString();
   const url = webhookUrl();
-  const connectionId = process.env.TELNYX_CONNECTION_ID;
 
   if (!url) {
     lastRegistration = {

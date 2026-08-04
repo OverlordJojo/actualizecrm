@@ -1,6 +1,7 @@
 import { db } from '@/lib/db';
 import { getSetting, asNumber } from '@/lib/settings';
 import { telnyxWebhookUrl } from '@/lib/worker';
+import { requireCallControlAppId } from '@actualizecrm/telephony';
 import {
   originate,
   speak,
@@ -100,8 +101,9 @@ export interface BurstLeg {
 export async function startBurst(
   contactIds: string[],
 ): Promise<{ burstId: string; legs: BurstLeg[]; allowedLines: number }> {
-  const connectionId = process.env.TELNYX_CONNECTION_ID;
-  if (!connectionId) throw new Error('TELNYX_CONNECTION_ID is not set.');
+  // A Call Control Application, not the credential connection the browser
+  // registers against. Telnyx rejects the latter with a 422 on every leg.
+  const connectionId = requireCallControlAppId();
 
   // Events for these legs go to the worker, not back here (§1.2). Pointing them
   // at the app would send them to a route that no longer exists.
