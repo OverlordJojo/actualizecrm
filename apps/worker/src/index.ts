@@ -13,7 +13,11 @@ import { processJob, lastSuccess } from './processor';
 import { handleTelnyxWebhook } from './telnyx/receiver';
 import { runWebhookProbe } from './telnyx/probe';
 import { registerWebhook, lastRegistration } from './telnyx/register';
-import { WEBHOOK_PATH, webhookUrl } from '@actualizecrm/telephony';
+import {
+  WEBHOOK_PATH,
+  webhookUrl,
+  signingKeyStatus,
+} from '@actualizecrm/telephony';
 
 /**
  * ActualizeCRM automation worker.
@@ -103,6 +107,11 @@ const server = http.createServer(async (req, res) => {
           lastSuccess,
           // Whether Telnyx knows where to send events, without reading logs.
           telnyxWebhook: lastRegistration,
+          // Whether this process can verify a signature at all. Reports the
+          // key's state, never the key. "I already set it" is usually true and
+          // set somewhere that is not this service, so make it checkable from
+          // outside rather than arguable.
+          telnyxSigningKey: signingKeyStatus(),
           uptimeSeconds: Math.round(process.uptime()),
         },
         null,

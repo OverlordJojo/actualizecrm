@@ -56,6 +56,22 @@ function publicKeyFromEnv(): Buffer | null {
 }
 
 /**
+ * Whether this process can verify a webhook at all — for `/health`.
+ *
+ * Reports the key's *state*, never the key. The distinction that matters is
+ * `missing` versus `malformed`: the first means the variable was never set on
+ * this service, the second means it was set to something that is not a 32-byte
+ * ed25519 key — a truncated paste, the API key by mistake, or a value that
+ * picked up a stray newline. Both reject every event, and from the outside they
+ * look identical, which is exactly the confusion this exists to end.
+ */
+export function signingKeyStatus(): 'ok' | 'missing' | 'malformed' {
+  const raw = process.env.TELNYX_PUBLIC_KEY?.trim();
+  if (!raw) return 'missing';
+  return publicKeyFromEnv() ? 'ok' : 'malformed';
+}
+
+/**
  * Verifies one webhook delivery.
  *
  * `rawBody` must be the exact bytes received. Passing `JSON.stringify(parsed)`

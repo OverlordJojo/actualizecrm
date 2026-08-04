@@ -4,6 +4,7 @@ import {
   hangup,
   encodeClientState,
   requireWebhookUrl,
+  signingKeyStatus,
 } from '@actualizecrm/telephony';
 
 /**
@@ -77,14 +78,25 @@ export async function runWebhookProbe(): Promise<ProbeResult> {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 
-  if (!process.env.TELNYX_PUBLIC_KEY) {
+  // Named precisely, because "I already set it" is the expected reply: the key
+  // has to be on the **worker** service, which is the process that receives
+  // events. Setting it in .env.local or on Vercel changes nothing here.
+  const keyStatus = signingKeyStatus();
+  if (keyStatus !== 'ok') {
     return {
       ok: false,
       webhookUrl,
       error:
-        'TELNYX_PUBLIC_KEY is not set, so every incoming event is rejected as ' +
-        'unsigned. Copy the public key from the Telnyx portal under Account ' +
-        'Settings → Keys.',
+        keyStatus === 'missing'
+          ? 'TELNYX_PUBLIC_KEY is not set on the worker service, so every incoming ' +
+            'event is rejected as unsigned. Add it in Railway → the worker service → ' +
+            'Variables (not the database services, and not .env.local — this process ' +
+            'runs on Railway). Copy the value from the Telnyx portal under Account ' +
+            'Settings → Keys → Public Key.'
+          : 'TELNYX_PUBLIC_KEY is set on the worker but is not a 32-byte ed25519 key, ' +
+            'so every incoming event is rejected. It was probably truncated on paste, ' +
+            'or it is the API key rather than the Public Key from Telnyx portal → ' +
+            'Account Settings → Keys.',
     };
   }
 
