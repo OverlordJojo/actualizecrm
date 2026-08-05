@@ -7,7 +7,7 @@ import {
 import { enqueue } from '../queue';
 import { claimEvent, releaseEvent } from './dedupe';
 import { resolveProbe, PROBE_KIND } from './probe';
-import { routeAnswer } from '@actualizecrm/dialer';
+import { routeAmdVerdict } from '@actualizecrm/dialer';
 
 /**
  * The Telnyx webhook endpoint (§1.2).
@@ -172,22 +172,39 @@ export async function handleTelnyxWebhook(
    * or held, so the queued copy is a no-op when the fast path worked and a
    * retry when it did not.
    */
-  if (eventType === 'call.answered' && state?.k === 'session' && state.role === 'prospect') {
+  /**
+   * The detection verdict is now what connects the call, so it is the event
+   * that cannot wait for the queue.
+   *
+   * A person has said "hello" and is listening to silence until this lands.
+   * Enqueue, poll, worker, act costs a few hundred milliseconds, and those
+   * milliseconds are the entire perceptible pause — the detection itself is
+   * quicker than the plumbing behind it.
+   */
+  const AMD_EVENTS = new Set([
+    'call.machine.detection.ended',
+    'call.machine.premium.detection.ended',
+  ]);
+
+  if (AMD_EVENTS.has(eventType) && state?.k === 'session' && state.role === 'prospect') {
     const legState = state as unknown as { sessionId: string; callId?: string };
     if (legState.callId) {
-      // Started here as well as in the processor: the queued copy no-ops once
-      // the fast path has bridged, and a greeting cannot be screened without a
-      // transcript running before it begins.
-      void startTranscription(
-        String(envelope.data?.payload?.call_control_id ?? ''),
-      ).catch(() => {});
-
-      void routeAnswer({
+      void routeAmdVerdict({
         sessionId: legState.sessionId,
         callId: legState.callId,
         callControlId: String(envelope.data?.payload?.call_control_id ?? ''),
-      }).catch((err) => console.error('[telnyx] fast-path answer failed', err));
+        verdict: (envelope.data?.payload?.result as string) ?? null,
+      }).catch((err) => console.error('[telnyx] fast-path AMD failed', err));
     }
+  }
+
+  if (eventType === 'call.answered' && state?.k === 'session' && state.role === 'prospect') {
+    // Answering does not connect anybody — the verdict does that. What it does
+    // do is start the transcript, which has to be running *before* a greeting
+    // begins or the screen has nothing to read when it matters.
+    void startTranscription(
+      String(envelope.data?.payload?.call_control_id ?? ''),
+    ).catch(() => {});
   }
 
   try {

@@ -204,14 +204,27 @@ export function amdParams() {
   return {
     answering_machine_detection: 'premium' as const,
     answering_machine_detection_config: {
-      // AMD gates the connection again, so every millisecond here is silence
-      // paid for by whoever just said hello. Tuned for speed: anything it
-      // cannot name in time is treated as a person and connected, and a machine
-      // that slips through is caught by the greeting screen a moment later.
-      total_analysis_time_millis: 3200,
-      after_greeting_silence_millis: 600,
-      between_words_silence_millis: 50,
-      greeting_duration_millis: 3500,
+      /**
+       * Tuned so a person waits almost nothing and a machine never gets
+       * through.
+       *
+       * These numbers are not one budget. `total_analysis_time_millis` is a
+       * *ceiling* for the ambiguous cases; the decision for a normal human
+       * arrives far sooner, because premium AMD fires as soon as it has heard a
+       * short greeting followed by silence. Somebody saying "Hello?" and
+       * stopping is named after `after_greeting_silence_millis` — so that is
+       * the number that decides what a real person experiences, and it is the
+       * one cut hardest.
+       *
+       * A machine keeps talking through its greeting, so it never triggers the
+       * silence rule and is still analysed properly. Cutting the silence
+       * threshold speeds up humans without helping machines slip past, which is
+       * exactly the asymmetry worth exploiting.
+       */
+      total_analysis_time_millis: 3000,
+      after_greeting_silence_millis: 350,
+      between_words_silence_millis: 40,
+      greeting_duration_millis: 2500,
     },
   };
 }
