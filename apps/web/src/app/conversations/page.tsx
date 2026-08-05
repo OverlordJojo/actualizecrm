@@ -1,15 +1,15 @@
-import { db } from '@/lib/db';
 import { ConversationsClient } from '@/components/conversations/ConversationsClient';
 
 export const dynamic = 'force-dynamic';
 
-export default async function ConversationsPage() {
-  // Lists are small, stable, and needed to render the filter bar — fetching
-  // them on the server keeps the page from flashing an empty dropdown.
-  const lists = await db.leadList.findMany({
-    orderBy: { createdAt: 'desc' },
-    select: { id: true, name: true },
-  });
-
-  return <ConversationsClient lists={lists} />;
+/**
+ * §7.1 — one view, no list filtering.
+ *
+ * Lead lists are no longer fetched here because they are no longer a filter
+ * dimension. An import still records which file a lead came from, for
+ * provenance, but "which spreadsheet was this" is not a question anybody works
+ * along.
+ */
+export default function ConversationsPage() {
+  return <ConversationsClient />;
 }

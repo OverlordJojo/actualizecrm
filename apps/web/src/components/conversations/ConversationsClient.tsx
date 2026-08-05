@@ -1,221 +1,133 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { PageHeader } from '@/components/PageHeader';
-import { ContactSlideOver } from '@/components/contact/ContactSlideOver';
 import { cn } from '@/lib/cn';
-import { formatPhone } from '@/lib/phone';
 import { DISPOSITIONS, dispositionLabel } from '@/lib/dispositions';
 
 /**
- * Conversations — every call, text, email and note across every lead, newest
- * first (build step 7).
+ * Conversations — one tab, one row per contact (§7.1, §7.2).
  *
- * The feed is one query against `Activity` rather than a union of four tables,
- * and search covers note bodies, message bodies and call transcripts, because
- * what the operator actually remembers is a phrase, not a date.
+ * The tabs are gone. Everything / Calls / Texts / Emails / Notes / Pipelines
+ * split one question into six answers, and the operator's question is never
+ * "show me my texts" — it is "who have I been talking to, and what happened
+ * last". A single list ordered by recency answers that, and a channel filter
+ * would only put it back.
+ *
+ * List-based filtering is gone entirely, including the idea. An import still
+ * carries a source label for provenance, but "which spreadsheet did this come
+ * from" is not a dimension anybody works along.
+ *
+ * Three filters remain — outcome, tag, stage — plus search. That is not a
+ * reduction for tidiness: each of the three answers a question the operator
+ * actually asks, and every one removed was answering a question they do not.
  */
 
-interface FeedContact {
+interface Row {
   id: string;
-  firstName: string | null;
-  lastName: string | null;
-  companyName: string | null;
-  companyLocation: string | null;
+  name: string;
+  company: string | null;
+  jobTitle: string | null;
   phone: string;
   email: string | null;
-  pipelineRemovedAt: string | null;
-  removalReason: string | null;
-  tags: { id: string; name: string; color: string }[];
+  stageName: string | null;
+  stageColor: string | null;
+  removed: boolean;
+  lastDisposition: string | null;
+  lastAt: string | null;
+  preview: string | null;
+  lastType: string | null;
 }
 
-interface FeedRow {
-  id: string;
-  type: string;
-  direction: string | null;
-  summary: string;
-  body: string | null;
-  meta: Record<string, unknown>;
-  callId: string | null;
-  createdAt: string;
-  contact: FeedContact;
-}
-
-interface Filters {
-  q: string;
-  channel: string;
-  disposition: string;
-  tagId: string;
-  listId: string;
-  from: string;
-  to: string;
-  view: 'all' | 'removed';
-}
-
-const EMPTY: Filters = {
-  q: '',
-  channel: '',
-  disposition: '',
-  tagId: '',
-  listId: '',
-  from: '',
-  to: '',
-  view: 'all',
-};
-
-const CHANNELS = [
-  ['', 'Everything'],
-  ['calls', 'Calls'],
-  ['texts', 'Texts'],
-  ['email', 'Email'],
-  ['notes', 'Notes'],
-  ['pipeline', 'Pipeline'],
-] as const;
-
-/// Matches the calendar lead picker (§2.3), and is short enough that the feed
-/// feels like it is filtering as you type rather than after you stop.
 const SEARCH_DEBOUNCE_MS = 200;
 
-export function ConversationsClient({
-  lists,
-}: {
-  lists: { id: string; name: string }[];
-}) {
-  const [filters, setFilters] = useState<Filters>(EMPTY);
-  const [rows, setRows] = useState<FeedRow[]>([]);
-  const [cursor, setCursor] = useState<string | null>(null);
+export function ConversationsClient() {
+  const [q, setQ] = useState('');
+  const [outcome, setOutcome] = useState('');
+  const [tagId, setTagId] = useState('');
+  const [stageId, setStageId] = useState('');
+
+  const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [tags, setTags] = useState<{ id: string; name: string; count: number }[]>([]);
-  const [openContactId, setOpenContactId] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [nextOffset, setNextOffset] = useState(0);
+
+  const [tags, setTags] = useState<{ id: string; name: string }[]>([]);
+  const [stages, setStages] = useState<{ id: string; name: string }[]>([]);
 
   /// Guards against a slow early request landing after a faster later one and
-  /// repainting the feed with stale results.
-  const requestSeq = useRef(0);
-
-  const buildQuery = useCallback((f: Filters, after?: string | null) => {
-    const p = new URLSearchParams();
-    if (f.q) p.set('q', f.q);
-    if (f.channel) p.set('channel', f.channel);
-    if (f.disposition) p.set('disposition', f.disposition);
-    if (f.tagId) p.set('tagId', f.tagId);
-    if (f.listId) p.set('listId', f.listId);
-    if (f.from) p.set('from', f.from);
-    if (f.to) p.set('to', f.to);
-    if (f.view !== 'all') p.set('view', f.view);
-    if (after) p.set('cursor', after);
-    return p.toString();
-  }, []);
+  /// repainting the list with stale results.
+  const seq = useRef(0);
 
   const load = useCallback(
-    async (f: Filters) => {
-      const seq = ++requestSeq.current;
-      setLoading(true);
+    async (offset: number, append: boolean) => {
+      const mine = ++seq.current;
+      if (append) setLoadingMore(true);
+      else setLoading(true);
+
+      const p = new URLSearchParams();
+      if (q) p.set('q', q);
+      if (outcome) p.set('outcome', outcome);
+      if (tagId) p.set('tagId', tagId);
+      if (stageId) p.set('stageId', stageId);
+      if (offset) p.set('offset', String(offset));
+
       try {
-        const res = await fetch(`/api/activities?${buildQuery(f)}`);
+        const res = await fetch(`/api/conversations?${p}`);
+        if (!res.ok || mine !== seq.current) return;
         const json = await res.json();
-        if (seq !== requestSeq.current) return;
-        setRows(json.activities ?? []);
-        setCursor(json.nextCursor ?? null);
+        setRows((prev) => (append ? [...prev, ...json.rows] : json.rows));
+        setHasMore(json.hasMore);
+        setNextOffset(json.nextOffset);
       } finally {
-        if (seq === requestSeq.current) setLoading(false);
+        if (mine === seq.current) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
       }
     },
-    [buildQuery],
+    [q, outcome, tagId, stageId],
   );
 
-  // Debounced on every filter, not just search: clicking through channels
-  // quickly should not fire a request per click.
   useEffect(() => {
-    const t = setTimeout(() => load(filters), SEARCH_DEBOUNCE_MS);
+    const t = setTimeout(() => void load(0, false), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [filters, load]);
+  }, [load]);
 
   useEffect(() => {
     fetch('/api/tags')
       .then((r) => r.json())
-      .then(setTags)
+      .then((t) => setTags(Array.isArray(t) ? t : []))
+      .catch(() => {});
+    fetch('/api/stages')
+      .then((r) => r.json())
+      .then((s) => setStages(Array.isArray(s) ? s : []))
       .catch(() => {});
   }, []);
 
-  async function loadMore() {
-    if (!cursor || loadingMore) return;
-    setLoadingMore(true);
-    try {
-      const res = await fetch(`/api/activities?${buildQuery(filters, cursor)}`);
-      const json = await res.json();
-      setRows((prev) => [...prev, ...(json.activities ?? [])]);
-      setCursor(json.nextCursor ?? null);
-    } finally {
-      setLoadingMore(false);
-    }
-  }
-
-  function set<K extends keyof Filters>(key: K, value: Filters[K]) {
-    setFilters((f) => ({ ...f, [key]: value }));
-  }
-
-  const activeFilterCount = [
-    filters.channel,
-    filters.disposition,
-    filters.tagId,
-    filters.listId,
-    filters.from,
-    filters.to,
-  ].filter(Boolean).length;
+  const filtered = Boolean(q || outcome || tagId || stageId);
 
   return (
     <>
       <PageHeader
         title="Conversations"
-        subtitle={
-          filters.view === 'removed'
-            ? 'Leads removed from the pipeline'
-            : 'Calls, texts and email in one feed'
-        }
-      >
+        subtitle="Everyone you have spoken to, most recent first"
+      />
+
+      <div className="flex shrink-0 flex-wrap items-center gap-2 px-4 py-2.5">
         <input
           className="input w-64 py-1.5 text-xs"
-          placeholder="Search notes, messages, transcripts…"
-          value={filters.q}
-          onChange={(e) => set('q', e.target.value)}
+          placeholder="Search name, company, title, phone, email"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
         />
-        <button
-          className={cn(
-            'btn-ghost py-1.5 text-xs',
-            filters.view === 'removed' && 'border-amber-700 text-amber-200',
-          )}
-          onClick={() =>
-            set('view', filters.view === 'removed' ? 'all' : 'removed')
-          }
-        >
-          {filters.view === 'removed' ? 'Showing removed' : 'Removed'}
-        </button>
-      </PageHeader>
-
-      {/* --- filter bar --- */}
-      <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-ink-800 px-5 py-2">
-        {CHANNELS.map(([value, label]) => (
-          <button
-            key={value}
-            onClick={() => set('channel', value)}
-            className={cn(
-              'rounded-full px-2.5 py-1 text-[11px] transition-colors',
-              filters.channel === value
-                ? 'bg-brand-500/15 text-brand-300'
-                : 'text-ink-400 hover:bg-ink-850 hover:text-ink-200',
-            )}
-          >
-            {label}
-          </button>
-        ))}
-
-        <span className="mx-1 h-4 w-px bg-ink-800" />
 
         <select
-          className="input w-auto py-1 text-[11px]"
-          value={filters.disposition}
-          onChange={(e) => set('disposition', e.target.value)}
+          className="input w-auto py-1.5 text-xs"
+          value={outcome}
+          onChange={(e) => setOutcome(e.target.value)}
         >
           <option value="">Any outcome</option>
           {DISPOSITIONS.map((d) => (
@@ -223,182 +135,141 @@ export function ConversationsClient({
               {d.label}
             </option>
           ))}
+          <option value="voicemail">Voicemail</option>
+          <option value="no_answer">No Answer</option>
         </select>
 
         <select
-          className="input w-auto py-1 text-[11px]"
-          value={filters.tagId}
-          onChange={(e) => set('tagId', e.target.value)}
+          className="input w-auto py-1.5 text-xs"
+          value={stageId}
+          onChange={(e) => setStageId(e.target.value)}
+        >
+          <option value="">Any stage</option>
+          {stages.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+
+        <select
+          className="input w-auto py-1.5 text-xs"
+          value={tagId}
+          onChange={(e) => setTagId(e.target.value)}
         >
           <option value="">Any tag</option>
           {tags.map((t) => (
             <option key={t.id} value={t.id}>
-              {t.name} ({t.count})
+              {t.name}
             </option>
           ))}
         </select>
 
-        <select
-          className="input w-auto py-1 text-[11px]"
-          value={filters.listId}
-          onChange={(e) => set('listId', e.target.value)}
-        >
-          <option value="">Any list</option>
-          {lists.map((l) => (
-            <option key={l.id} value={l.id}>
-              {l.name}
-            </option>
-          ))}
-        </select>
-
-        <input
-          type="date"
-          className="input w-auto py-1 text-[11px]"
-          value={filters.from}
-          onChange={(e) => set('from', e.target.value)}
-          title="From"
-        />
-        <input
-          type="date"
-          className="input w-auto py-1 text-[11px]"
-          value={filters.to}
-          onChange={(e) => set('to', e.target.value)}
-          title="To"
-        />
-
-        {(activeFilterCount > 0 || filters.q) && (
+        {filtered && (
           <button
-            className="ml-1 text-[11px] text-ink-400 underline hover:text-ink-200"
-            onClick={() => setFilters({ ...EMPTY, view: filters.view })}
+            className="text-xs text-ink-500 underline"
+            onClick={() => {
+              setQ('');
+              setOutcome('');
+              setTagId('');
+              setStageId('');
+            }}
           >
             Clear
           </button>
         )}
       </div>
 
-      {/* --- feed --- */}
-      <div className="scroll-thin flex-1 overflow-y-auto">
-        {loading && rows.length === 0 ? (
-          <p className="p-5 text-sm text-ink-500">Loading…</p>
+      <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+        {loading ? (
+          <p className="py-8 text-center text-sm text-ink-600">Loading…</p>
         ) : rows.length === 0 ? (
-          <p className="p-5 text-sm text-ink-500">
-            {filters.q
-              ? `Nothing matches “${filters.q}”.`
-              : filters.view === 'removed'
-                ? 'No leads have been removed from the pipeline.'
-                : 'Nothing here yet. Dials, texts and emails all land in this feed.'}
+          <p className="py-8 text-center text-sm text-ink-600">
+            {filtered ? 'Nobody matches those filters.' : 'No conversations yet.'}
           </p>
         ) : (
-          <>
-            <ol className="divide-y divide-ink-800">
-              {rows.map((r) => {
-                const name =
-                  [r.contact.firstName, r.contact.lastName].filter(Boolean).join(' ') ||
-                  r.contact.companyName ||
-                  formatPhone(r.contact.phone);
-                const disposition = r.meta?.disposition as string | undefined;
-                return (
-                  <li key={r.id}>
-                    <button
-                      onClick={() => setOpenContactId(r.contact.id)}
-                      className="flex w-full items-start gap-3 px-5 py-2.5 text-left transition-colors hover:bg-ink-900"
-                    >
-                      <span
-                        className={cn(
-                          'mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wide',
-                          TYPE_TONE[r.type] ?? 'bg-ink-800 text-ink-400',
-                        )}
-                      >
-                        {TYPE_LABEL[r.type] ?? r.type}
-                      </span>
-
-                      <span className="min-w-0 flex-1">
-                        <span className="flex items-baseline gap-2">
-                          <span className="truncate text-sm font-medium text-ink-100">
-                            {name}
-                          </span>
-                          {r.contact.companyName && name !== r.contact.companyName && (
-                            <span className="truncate text-xs text-ink-500">
-                              {r.contact.companyName}
-                            </span>
-                          )}
-                          {r.contact.pipelineRemovedAt && (
-                            <span className="shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] text-amber-300">
-                              removed
-                            </span>
-                          )}
-                        </span>
-                        <span className="mt-0.5 block truncate text-xs text-ink-300">
-                          {r.summary}
-                        </span>
-                        {r.body && (
-                          <span className="mt-0.5 block truncate text-xs text-ink-500">
-                            {r.body}
-                          </span>
-                        )}
-                      </span>
-
-                      <span className="shrink-0 text-right">
-                        <span className="block text-[10px] text-ink-500">
-                          {new Date(r.createdAt).toLocaleString()}
-                        </span>
-                        {disposition && (
-                          <span className="mt-0.5 block text-[10px] text-ink-400">
-                            {dispositionLabel(disposition)}
-                          </span>
-                        )}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ol>
-
-            {cursor && (
-              <div className="p-4 text-center">
-                <button
-                  className="btn-ghost py-1.5 text-xs"
-                  onClick={loadMore}
-                  disabled={loadingMore}
+          <ul className="divide-y divide-ink-850">
+            {rows.map((r) => (
+              <li key={r.id}>
+                <Link
+                  href={`/conversations/${r.id}`}
+                  className="flex items-center gap-3 px-1 py-2.5 transition-colors hover:bg-ink-900/60"
                 >
-                  {loadingMore ? 'Loading…' : 'Load older'}
-                </button>
-              </div>
-            )}
-          </>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline gap-2">
+                      <span className="truncate text-sm font-medium text-ink-100">
+                        {r.name}
+                      </span>
+                      {r.company && (
+                        <span className="truncate text-xs text-ink-500">
+                          {r.company}
+                        </span>
+                      )}
+                    </div>
+                    <p className="truncate text-xs text-ink-500">
+                      {r.preview ?? 'No interactions yet'}
+                    </p>
+                  </div>
+
+                  {r.lastDisposition && (
+                    <span className="shrink-0 text-[10px] text-ink-500">
+                      {dispositionLabel(r.lastDisposition)}
+                    </span>
+                  )}
+
+                  {/* Stage, or the fact that they were removed. A trashed lead
+                      is still searchable forever (§7.6) and the badge is how
+                      the operator knows which they are looking at. */}
+                  <span
+                    className={cn(
+                      'shrink-0 rounded px-1.5 py-0.5 text-[10px]',
+                      r.removed
+                        ? 'bg-ink-850 text-ink-500'
+                        : 'bg-ink-800 text-ink-300',
+                    )}
+                    style={
+                      !r.removed && r.stageColor
+                        ? { color: r.stageColor, backgroundColor: `${r.stageColor}1a` }
+                        : undefined
+                    }
+                  >
+                    {r.removed ? 'Removed' : (r.stageName ?? 'No stage')}
+                  </span>
+
+                  <span className="w-16 shrink-0 text-right text-[10px] tabular-nums text-ink-600">
+                    {relative(r.lastAt)}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {hasMore && (
+          <button
+            className="btn-ghost mt-3 w-full py-1.5 text-xs"
+            onClick={() => void load(nextOffset, true)}
+            disabled={loadingMore}
+          >
+            {loadingMore ? 'Loading…' : 'Load more'}
+          </button>
         )}
       </div>
-
-      <ContactSlideOver
-        contactId={openContactId}
-        onClose={() => setOpenContactId(null)}
-        onChanged={() => load(filters)}
-      />
     </>
   );
 }
 
-const TYPE_LABEL: Record<string, string> = {
-  call: 'call',
-  sms: 'text',
-  email: 'email',
-  note: 'note',
-  stage_change: 'stage',
-  disposition: 'outcome',
-  tag: 'tag',
-  import: 'import',
-  automation: 'auto',
-  voicemail_drop: 'voicemail',
-};
-
-const TYPE_TONE: Record<string, string> = {
-  call: 'bg-brand-500/15 text-brand-300',
-  sms: 'bg-sky-500/15 text-sky-300',
-  email: 'bg-indigo-500/15 text-indigo-300',
-  note: 'bg-ink-800 text-ink-300',
-  stage_change: 'bg-emerald-500/15 text-emerald-300',
-  disposition: 'bg-amber-500/15 text-amber-300',
-  tag: 'bg-fuchsia-500/15 text-fuchsia-300',
-  voicemail_drop: 'bg-violet-500/15 text-violet-300',
-  automation: 'bg-teal-500/15 text-teal-300',
-};
+/// Relative time, coarse on purpose. "3d" is what the operator needs; the exact
+/// timestamp is one click away in the thread.
+function relative(iso: string | null): string {
+  if (!iso) return '—';
+  const diff = Date.now() - new Date(iso).getTime();
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return 'now';
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h`;
+  const d = Math.floor(hr / 24);
+  if (d < 30) return `${d}d`;
+  return `${Math.floor(d / 30)}mo`;
+}
