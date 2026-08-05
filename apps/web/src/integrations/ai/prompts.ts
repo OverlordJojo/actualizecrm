@@ -49,6 +49,7 @@ OUTPUT SCHEMA — return exactly this shape:
   "email": {"value": string|null, "evidence": string|null, "confidence": number},
   "first_name": {"value": string|null, "evidence": string|null, "confidence": number},
   "last_name": {"value": string|null, "evidence": string|null, "confidence": number},
+  "job_title": {"value": string|null, "evidence": string|null, "confidence": number},
   "company": {"value": string|null, "evidence": string|null, "confidence": number},
   "address": {"value": string|null, "evidence": string|null, "confidence": number},
   "booking": {
@@ -60,7 +61,7 @@ OUTPUT SCHEMA — return exactly this shape:
     "evidence": string|null,
     "confidence": number
   },
-  "stage": {"value": string, "evidence": string|null, "confidence": number},
+  "outcome": {"value": string, "evidence": string|null, "confidence": number},
   "is_gatekeeper": boolean,
   "is_voicemail_or_automated": boolean
 }`;

@@ -52,3 +52,30 @@ export async function relayToApp(body: unknown): Promise<RelayResult> {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
+
+/**
+ * Asks the app to run extraction against a live call (§5.3).
+ *
+ * Fire-and-forget. Extraction is a suggestion the operator may never look at,
+ * and nothing about a call should wait on it — least of all the transcript
+ * append that triggered it.
+ */
+export async function relayLiveExtraction(
+  callId: string,
+  contactId: string,
+): Promise<void> {
+  const base = appUrl();
+  const secret = process.env.WORKER_SHARED_SECRET;
+  if (!base || !secret) return;
+
+  try {
+    await fetch(`${base}/api/ai/live`, {
+      method: 'POST',
+      headers: { 'x-worker-secret': secret, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callId, contactId }),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch {
+    // A missed extraction costs a suggestion the operator was not waiting for.
+  }
+}

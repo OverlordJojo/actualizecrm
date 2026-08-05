@@ -28,10 +28,15 @@ export interface Extraction {
   email: Field;
   first_name: Field;
   last_name: Field;
+  /// §9.1 — job title is extracted like any other field. It is the single most
+  /// useful thing to know before a callback and almost never on the import.
+  job_title: Field;
   company: Field;
   address: Field;
   booking: BookingField;
-  stage: Field;
+  /// §5.4's output schema. One of booked | interested | callback |
+  /// not_interested | unknown, which map one-to-one onto the stages (§3.5).
+  outcome: Field;
   is_gatekeeper: boolean;
   is_voicemail_or_automated: boolean;
 }
@@ -44,6 +49,7 @@ export interface TranscriptTurn {
 export interface LeadOnFile {
   first_name?: string | null;
   last_name?: string | null;
+  job_title?: string | null;
   email?: string | null;
   company?: string | null;
   address?: string | null;
@@ -55,6 +61,7 @@ const EMPTY_EXTRACTION: Extraction = {
   email: EMPTY_FIELD,
   first_name: EMPTY_FIELD,
   last_name: EMPTY_FIELD,
+  job_title: EMPTY_FIELD,
   company: EMPTY_FIELD,
   address: EMPTY_FIELD,
   booking: {
@@ -66,7 +73,7 @@ const EMPTY_EXTRACTION: Extraction = {
     evidence: null,
     confidence: 0,
   },
-  stage: { value: 'new', evidence: null, confidence: 0 },
+  outcome: { value: 'unknown', evidence: null, confidence: 0 },
   is_gatekeeper: false,
   is_voicemail_or_automated: false,
 };

@@ -18,6 +18,14 @@ import {
  * them may throw far enough to lose the call itself.
  */
 
+/// §3.5's one-to-one mapping, in the one direction the model does not know.
+const STAGE_FOR_OUTCOME: Record<string, string> = {
+  booked: 'Booked',
+  interested: 'Interested',
+  callback: 'Callback',
+  not_interested: 'Not Interested',
+};
+
 export interface PipelineResult {
   transcribed: boolean;
   extracted: boolean;
@@ -205,12 +213,15 @@ async function recordSuggestions(
     }
   }
 
-  if (extraction.stage?.value && extraction.stage.value !== 'new') {
+  // §5.4 renamed this from `stage` to `outcome`: the model reasons about what
+  // happened on the call, and §3.5 maps that onto a column. Asking it for a
+  // stage name meant asking it to know the board.
+  if (extraction.outcome?.value && extraction.outcome.value !== 'unknown') {
     rows.push({
       fieldType: 'stage',
-      value: extraction.stage.value,
-      evidence: extraction.stage.evidence,
-      confidence: extraction.stage.confidence ?? 0,
+      value: STAGE_FOR_OUTCOME[extraction.outcome.value] ?? 'New',
+      evidence: extraction.outcome.evidence,
+      confidence: extraction.outcome.confidence ?? 0,
     });
   }
 

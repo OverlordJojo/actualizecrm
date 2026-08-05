@@ -15,7 +15,7 @@ import {
   finalizeAttribution,
   type SessionLegState,
 } from '@actualizecrm/dialer';
-import { relayToApp } from '../lib/app-relay';
+import { relayToApp, relayLiveExtraction } from '../lib/app-relay';
 
 /**
  * One Telnyx call event, processed off the queue (§1.2).
@@ -361,9 +361,16 @@ async function handleSessionEvent(
 
       const call = await db.call.findUnique({
         where: { id: callId },
-        select: { transcript: true, disposition: true },
+        select: { transcript: true, disposition: true, contactId: true },
       });
+
       if (call?.disposition !== 'voicemail') {
+        // A prospect turn is the trigger for extraction (§5.3). The operator's
+        // own words are never a source: reading an email back to confirm it is
+        // not the prospect providing one.
+        if (call && t.track === 'inbound') {
+          void relayLiveExtraction(callId, call.contactId);
+        }
         return { handled: true, eventType, note: 'transcript appended' };
       }
 

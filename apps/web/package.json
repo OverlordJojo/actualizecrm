@@ -10,8 +10,8 @@
   },
   "dependencies": {
     "@actualizecrm/db": "*",
+    "@actualizecrm/dialer": "*",
     "@actualizecrm/telephony": "*",
-    "@anthropic-ai/sdk": "^0.115.0",
     "@aws-sdk/client-s3": "^3.1101.0",
     "@aws-sdk/s3-request-presigner": "^3.1101.0",
     "@deepgram/sdk": "^5.7.0",
@@ -24,14 +24,14 @@
     "libphonenumber-js": "^1.11.15",
     "next": "14.2.35",
     "nodemailer": "^6.9.16",
+    "openai": "^7.4.0",
     "react": "^18",
     "react-dom": "^18",
     "resend": "^4.0.1",
     "tailwind-merge": "^2.5.5",
     "telnyx": "^1.25.5",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
-    "zod": "^3.23.8",
-    "@actualizecrm/dialer": "*"
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^20",

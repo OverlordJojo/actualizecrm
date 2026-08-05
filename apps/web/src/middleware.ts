@@ -21,6 +21,9 @@ const PUBLIC_PATHS = [
   // The worker hands over the call events that need R2 or the extraction
   // pipeline. It presents the shared secret, which the route checks itself.
   '/api/telnyx/relay',
+  // Live extraction, triggered by a transcript webhook. Same shape: no browser
+  // is involved, and the route checks the secret itself.
+  '/api/ai/live',
   // The worker calls this every 15 minutes with the shared secret; there is no
   // operator at a browser when it runs. The route checks the secret itself.
   '/api/calendar/reconcile',
