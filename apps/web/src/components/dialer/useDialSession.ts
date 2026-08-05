@@ -71,14 +71,23 @@ interface Governor {
   warning: string | null;
 }
 
-/// How often the dialer re-reads server state while a session is live.
-///
-/// One second. The visible cost is the moment a burst collapses to a single
-/// lead card, and a second of lag there is noticeable but not harmful. §2.7 asks
-/// for a WebSocket push; that needs a socket the worker can reach the browser
-/// on, which is §5's media-stream work. Polling is the honest interim and it is
-/// marked as such rather than quietly left.
-const POLL_MS = 1000;
+/**
+ * How often the dialer re-reads server state while a session is live.
+ *
+ * 200ms. The audio path does not wait on this — the conference is joined
+ * server-side the moment a leg answers — but everything the operator *sees*
+ * does: the burst collapsing to one card, the hang-up button going live, the
+ * ringback stopping. A second of lag there reads as the dialer being slow even
+ * when the call itself was instant.
+ *
+ * Five requests a second sounds like a lot and is not: one operator, one
+ * session, one small query, and only while a session is actually live.
+ *
+ * §2.7 asks for a WebSocket push instead. That needs a socket the worker can
+ * reach the browser on, which arrives with §5's media streaming; until then this
+ * is close enough to be indistinguishable.
+ */
+const POLL_MS = 200;
 
 /**
  * How long an auto-trashed lead stays undoable (§3.4).

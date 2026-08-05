@@ -1,8 +1,13 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { verifyTelnyxSignature, decodeClientState } from '@actualizecrm/telephony';
+import {
+  verifyTelnyxSignature,
+  decodeClientState,
+  startTranscription,
+} from '@actualizecrm/telephony';
 import { enqueue } from '../queue';
 import { claimEvent, releaseEvent } from './dedupe';
 import { resolveProbe, PROBE_KIND } from './probe';
+import { routeAnswer } from '@actualizecrm/dialer';
 
 /**
  * The Telnyx webhook endpoint (§1.2).
@@ -150,6 +155,39 @@ export async function handleTelnyxWebhook(
   );
   if (state?.k === PROBE_KIND) {
     resolveProbe(String(state.probeId ?? ''), eventType);
+  }
+
+  /**
+   * The one event that cannot wait for the queue.
+   *
+   * A prospect has said hello and is listening to silence until their leg joins
+   * the conference. Everything else here — records, dispositions, attribution —
+   * is bookkeeping that nobody is standing over, but this is the gap between
+   * "hello" and hearing a voice back, and it is measured against somebody's
+   * patience.
+   *
+   * Enqueue → poll → worker → act costs a few hundred milliseconds on a good
+   * day. So it runs inline, right now, and the job is still queued behind it as
+   * a durability backstop: `routeAnswer` refuses a leg that is already bridged
+   * or held, so the queued copy is a no-op when the fast path worked and a
+   * retry when it did not.
+   */
+  if (eventType === 'call.answered' && state?.k === 'session' && state.role === 'prospect') {
+    const legState = state as unknown as { sessionId: string; callId?: string };
+    if (legState.callId) {
+      // Started here as well as in the processor: the queued copy no-ops once
+      // the fast path has bridged, and a greeting cannot be screened without a
+      // transcript running before it begins.
+      void startTranscription(
+        String(envelope.data?.payload?.call_control_id ?? ''),
+      ).catch(() => {});
+
+      void routeAnswer({
+        sessionId: legState.sessionId,
+        callId: legState.callId,
+        callControlId: String(envelope.data?.payload?.call_control_id ?? ''),
+      }).catch((err) => console.error('[telnyx] fast-path answer failed', err));
+    }
   }
 
   try {
