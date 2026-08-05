@@ -195,20 +195,6 @@ export function DialControls({
         </div>
       )}
 
-      {/* A recording playing into the operator's ear with no explanation reads
-          as a bug. Say what it is, and that hanging up moves on. */}
-      {listeningToVoicemail && (
-        <div className="rounded-lg border border-violet-800 bg-violet-950/40 px-3 py-2">
-          <p className="text-xs font-medium text-violet-200">
-            Answering machine — listening to the greeting
-          </p>
-          <p className="mt-0.5 text-[11px] leading-relaxed text-violet-100/70">
-            Owner&rsquo;s voice or a front desk? Hang up when you have heard
-            enough; it is already logged as a voicemail.
-          </p>
-        </div>
-      )}
-
       {/* manual dial pad */}
       <form
         className="flex gap-1.5"

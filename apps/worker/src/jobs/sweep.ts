@@ -11,7 +11,7 @@
  * under a legal cap.
  */
 
-import { sweepExpiredHolds } from '@actualizecrm/dialer';
+import { sweepExpiredHolds, sweepUnreadVoicemails } from '@actualizecrm/dialer';
 
 export interface SweepResult {
   abandoned: number;
@@ -29,7 +29,12 @@ export interface SweepResult {
  */
 export async function sweepHeldCalls(): Promise<SweepResult> {
   try {
-    return { abandoned: await sweepExpiredHolds() };
+    const [abandoned] = await Promise.all([
+      sweepExpiredHolds(),
+      // Machine legs kept alive only to be transcribed; nothing else ends them.
+      sweepUnreadVoicemails().catch(() => 0),
+    ]);
+    return { abandoned };
   } catch (err) {
     // A ten-second job must never throw into the dead-letter queue over a
     // transient blip; the next tick will try again.

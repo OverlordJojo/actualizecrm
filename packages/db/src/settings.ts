@@ -18,6 +18,12 @@ export const SETTING_DEFAULTS = {
   'dialer.callerIdStrategy': 'nearest', // "nearest" | "roundRobin" | "fixed"
   'dialer.fixedCallerIdNumberId': '',
   'dialer.activePipelineId': '',
+  /// How long a prospect's phone rings before the dialer gives up.
+  ///
+  /// Past about 25 seconds a call is going to voicemail anyway, and every extra
+  /// second is a line held open that could be ringing somebody else. Too short
+  /// and you miss people who were walking to the phone.
+  'dialer.maxRingSeconds': '30',
 
   // Analytics
   /// Seconds a human must stay on the line to count as the owner rather than

@@ -10,6 +10,7 @@ import {
   onOperatorLegAnswered,
   routeAmdVerdict,
   routeAnswer,
+  screenVoicemailGreeting,
   releaseActive,
   finalizeAttribution,
   type SessionLegState,
@@ -290,6 +291,12 @@ async function handleSessionEvent(
         where: { id: callId, answeredAt: null },
         data: { answeredAt: new Date() },
       });
+      // Transcription has to be running before the greeting starts, or there
+      // is nothing to screen it with. Best-effort: a call that cannot be
+      // transcribed still connects.
+      startTranscription(callControlId).catch((e) =>
+        console.error('[telnyx] transcription_start failed', e),
+      );
       const routing = await routeAnswer({ sessionId, callId, callControlId });
       return { handled: true, eventType, note: `answered → ${routing}` };
     }
@@ -335,6 +342,38 @@ async function handleSessionEvent(
         eventType,
         note: `prospect leg ended — ${attribution.reason}`,
       };
+    }
+
+    // Transcript arriving on a prospect leg. On a voicemail this is what
+    // decides whether the operator hears it at all.
+    case 'call.transcription': {
+      const t = p.transcription_data;
+      if (!t?.transcript || t.is_final === false) {
+        return { handled: true, eventType, note: 'interim' };
+      }
+
+      await appendLiveSegment(callId, {
+        speaker: t.track === 'inbound' ? 'Prospect' : 'You',
+        text: t.transcript,
+        confidence: t.confidence ?? null,
+        at: new Date().toISOString(),
+      });
+
+      const call = await db.call.findUnique({
+        where: { id: callId },
+        select: { transcript: true, disposition: true },
+      });
+      if (call?.disposition !== 'voicemail') {
+        return { handled: true, eventType, note: 'transcript appended' };
+      }
+
+      const kind = await screenVoicemailGreeting({
+        sessionId,
+        callId,
+        callControlId,
+        transcript: call.transcript ?? t.transcript,
+      });
+      return { handled: true, eventType, note: `greeting=${kind}` };
     }
 
     default:

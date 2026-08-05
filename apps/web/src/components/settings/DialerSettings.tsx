@@ -27,6 +27,7 @@ export function DialerSettings() {
   const [gap, setGap] = useState('2');
   const [rate, setRate] = useState('0.005');
   const [hold, setHold] = useState('25');
+  const [ring, setRing] = useState('30');
   const [gov, setGov] = useState<Governor | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
 
@@ -42,6 +43,7 @@ export function DialerSettings() {
         setGap(s['dialer.gapDelaySeconds'] ?? '2');
         setRate(s['analytics.ratePerMinute'] ?? '0.005');
         setHold(s['dialer.holdMaxSeconds'] ?? '25');
+        setRing(s['dialer.maxRingSeconds'] ?? '30');
       })
       .catch(() => {});
     loadGovernor();
@@ -84,6 +86,27 @@ export function DialerSettings() {
       )}
 
       <div className="panel space-y-3 p-3">
+        <div className="flex items-center gap-3">
+          <div>
+            <label className="label">Ring for</label>
+            <input
+              type="number"
+              min={10}
+              max={90}
+              className="input w-24 py-1.5 text-xs"
+              value={ring}
+              onChange={(e) => setRing(e.target.value)}
+              onBlur={() => save({ 'dialer.maxRingSeconds': ring }, 'Ring limit')}
+            />
+          </div>
+          <span className="mt-4 text-xs text-ink-500">
+            Seconds a prospect&rsquo;s phone rings before the dialer gives up.
+            Past about 25 the call is going to voicemail anyway, and the line
+            could be ringing somebody else. Too short and you hang up on people
+            who were walking to the phone.
+          </span>
+        </div>
+
         <div className="flex items-center gap-3">
           <div>
             <label className="label">Gap between calls</label>

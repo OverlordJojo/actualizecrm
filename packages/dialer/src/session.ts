@@ -20,6 +20,11 @@ import {
   findConferenceByName,
 } from '@actualizecrm/telephony';
 import { pickCallerId, operatorSipUri } from './routing';
+import {
+  classifyGreeting,
+  extractGreetingName,
+  type GreetingKind,
+} from './greeting';
 import type { SessionLegState } from './state';
 
 /**
@@ -41,6 +46,21 @@ import type { SessionLegState } from './state';
 
 export const HOLD_MIN_SECONDS = 10;
 export const HOLD_MAX_SECONDS_CAP = 45;
+
+/**
+ * How long a prospect's phone rings before the dialer gives up (operator
+ * setting).
+ *
+ * Clamped rather than trusted. Below ten seconds you hang up on people who were
+ * walking to the phone; above ninety you are holding a line open for somebody
+ * who is not coming, and that line could be ringing somebody else.
+ */
+export async function maxRingSeconds(): Promise<number> {
+  return Math.min(
+    Math.max(asNumber(await getSetting('dialer.maxRingSeconds'), 30), 10),
+    90,
+  );
+}
 
 export async function holdMaxSeconds(): Promise<number> {
   return Math.min(
@@ -282,6 +302,7 @@ export async function openBurst(
   const webhookUrl = requireWebhookUrl();
 
   const burstId = crypto.randomUUID();
+  const ringSeconds = await maxRingSeconds();
   const wanted = contactIds.slice(0, Math.max(1, allowedLines));
   const legs: BurstLeg[] = [];
   const usedNumbers: string[] = [];
@@ -320,6 +341,7 @@ export async function openBurst(
         from: from.e164,
         connectionId,
         webhookUrl,
+        timeoutSecs: ringSeconds,
         clientState: legState({
           k: 'session',
           sessionId,
@@ -516,6 +538,150 @@ export async function routeAnswer(params: {
 }
 
 /**
+ * Decides whether a machine greeting is worth the operator's ears.
+ *
+ * Called as transcript arrives on a leg already dispositioned voicemail. A
+ * carrier's own recording carries nothing about the business and is dropped; a
+ * greeting somebody recorded themselves is left playing, because the voice is
+ * the whole point — owner or front desk is a judgement the operator makes in
+ * two seconds and nothing else can make at all.
+ *
+ * Undecided greetings are kept. Hearing one robot costs a second; hanging up on
+ * a real greeting throws away the judgement.
+ */
+export async function screenVoicemailGreeting(params: {
+  sessionId: string;
+  callId: string;
+  callControlId: string;
+  transcript: string;
+}): Promise<GreetingKind> {
+  const { callId, callControlId, transcript } = params;
+
+  const call = await db.call.findUnique({ where: { id: callId } });
+  if (!call || call.endedAt || call.disposition !== 'voicemail') return 'unknown';
+
+  const contact = await db.contact.findUnique({
+    where: { id: call.contactId },
+    select: { firstName: true, lastName: true, companyName: true },
+  });
+
+  let name = extractGreetingName(transcript);
+
+  /**
+   * "Hi, you've reached Acme, please leave a message" is a person reading a
+   * company script. It is still a real mailbox and still a callback — but the
+   * word after "you've reached" is the business, not somebody's first name, and
+   * writing it into the name field would have the operator open the callback
+   * with "Hi Acme".
+   *
+   * The lead's own company name is the check. A generic word list cannot know
+   * that "Acme" is a company; the record already does.
+   */
+  if (name && contact?.companyName) {
+    const company = contact.companyName.toLowerCase();
+    const heard = name.firstName.toLowerCase();
+    if (company.includes(heard) || heard.includes(company.split(' ')[0])) {
+      name = null;
+    }
+  }
+
+  // Either signal is enough. A name is proof of a person; a first-person
+  // greeting is proof somebody recorded it themselves. Both mean a mailbox
+  // worth calling back, whether or not it names anyone.
+  const kind = name ? 'human' : classifyGreeting(transcript);
+
+  // Still listening. Give the greeting another segment to identify itself.
+  if (kind === 'unknown' && !name) return 'unknown';
+
+  await hangup(callControlId).catch(() => {});
+  await db.call.update({
+    where: { id: callId },
+    data: { status: 'completed', endedAt: new Date() },
+  });
+
+  if (kind === 'carrier') {
+    await db.activity.create({
+      data: {
+        contactId: call.contactId,
+        type: 'disposition',
+        direction: 'outbound',
+        summary: 'Carrier recording or phone menu — no mailbox worth following up',
+        callId,
+        meta: { greeting: transcript.slice(0, 300), classified: 'carrier' },
+      },
+    });
+    return 'carrier';
+  }
+
+  /**
+   * Somebody's own greeting. That is a callback, not a dead end.
+   *
+   * A person who recorded their own message is reachable, and a person who
+   * says their name in it is certainly reachable — a carrier recording never
+   * says a name. So the lead is filed to Callback automatically, and the name
+   * is written to the record if it was spoken, which is often the only place a
+   * cold lead's first name ever comes from.
+   *
+   * The name is only written over an empty field. An imported name is what the
+   * operator's list says; a transcript is a guess at a word heard over a phone
+   * line, and it does not get to overwrite the former.
+   */
+  const stage = await db.pipelineStage.findFirst({
+    where: { name: 'Callback' },
+    orderBy: { position: 'asc' },
+  });
+
+  // Only ever fills an empty field. An imported name is what the operator's
+  // list says; a transcript is a guess at a word heard over a phone line, and a
+  // guess does not overwrite a record.
+  const nameUpdate = name
+    ? {
+        ...(contact?.firstName ? {} : { firstName: name.firstName }),
+        ...(name.lastName && !contact?.lastName ? { lastName: name.lastName } : {}),
+      }
+    : {};
+
+  if (stage) {
+    await db.contact.updateMany({
+      where: { stageId: stage.id },
+      data: { stagePosition: { increment: 1 } },
+    });
+  }
+
+  await db.contact.update({
+    where: { id: call.contactId },
+    data: {
+      ...nameUpdate,
+      lastDisposition: 'callback',
+      ...(stage ? { stageId: stage.id, stagePosition: 0 } : {}),
+      pipelineRemovedAt: null,
+      removalReason: null,
+    },
+  });
+
+  await db.call.update({ where: { id: callId }, data: { disposition: 'callback' } });
+
+  await db.activity.create({
+    data: {
+      contactId: call.contactId,
+      type: 'disposition',
+      direction: 'outbound',
+      summary: name
+        ? `Voicemail from ${[name.firstName, name.lastName].filter(Boolean).join(' ')} — moved to Callback`
+        : 'Personal voicemail greeting — moved to Callback',
+      callId,
+      meta: {
+        greeting: transcript.slice(0, 300),
+        classified: 'human',
+        nameHeard: name ? `${name.firstName} ${name.lastName ?? ''}`.trim() : null,
+      },
+    },
+  });
+
+  return 'human';
+}
+
+/**
  * Whether this leg is the one the operator is actually listening to.
  *
  * Used to decide if a detected machine should be left playing for review or
@@ -591,62 +757,52 @@ export async function routeAmdVerdict(params: {
   const machine = isMachineVerdict(verdict);
 
   /**
-   * A machine, now known. What happens next depends on whether the operator is
-   * free.
+   * A machine. The operator never listens to it (revised again, on the
+   * operator's instruction — and they were right).
    *
-   * A voicemail greeting is not noise to be filtered — it is evidence. Whether
-   * it is the owner's own voice or a front desk decides whether the lead is
-   * worth calling back, and that judgement is the operator's, not a model's.
-   * So when they are free, they stay on and listen.
+   * Playing greetings for review sounded useful and was not: it occupied the
+   * one line that matters while a real person waited behind it. Everything
+   * worth knowing from a greeting is in its words, and words can be read
+   * without anybody's attention.
    *
-   * When they are already talking to somebody, the machine is dropped without a
-   * word. Interrupting a live conversation to play a recording at them is the
-   * one thing worse than not hearing it at all.
+   * So the leg is released from the operator immediately and kept alive on its
+   * own for a few seconds, purely to transcribe. `screenVoicemailGreeting` then
+   * decides what it was and files the lead accordingly.
    */
-  const listening = machine && (await operatorIsFree(sessionId, callId));
-
-  if (!listening) {
-    await hangup(callControlId).catch(() => {});
+  if (call.bridgedAt) {
+    const s2 = await db.dialSession.findUnique({ where: { id: sessionId } });
+    if (s2?.conferenceId && call.callControlId) {
+      await leaveConference({
+        conferenceId: s2.conferenceId,
+        callControlId: call.callControlId,
+      }).catch(() => {});
+    }
   }
+  await releaseActive(sessionId, callId);
 
   await db.call.update({
     where: { id: callId },
-    data: {
-      disposition: machine ? 'voicemail' : 'automated_system',
-      // A call the operator is still listening to has not ended.
-      ...(listening ? {} : { status: 'completed', endedAt: new Date() }),
-    },
+    data: { disposition: machine ? 'voicemail' : 'automated_system' },
   });
   await db.contact.update({
     where: { id: call.contactId },
     data: {
-      lastDisposition: isMachineVerdict(verdict) ? 'voicemail' : 'automated_system',
+      lastDisposition: machine ? 'voicemail' : 'automated_system',
       noAnswerStreak: 0,
     },
   });
-  await db.activity.create({
-    data: {
-      contactId: call.contactId,
-      type: 'disposition',
-      direction: 'outbound',
-      summary: listening
-        ? 'Reached a machine — playing the greeting for review'
-        : machine
-          ? 'Reached a machine — dropped, the operator was on another call'
-          : 'Reached a fax or modem — dropped once detection confirmed it',
-      callId,
-      meta: {
-        amdResult: verdict,
-        bridgedFirst: call.bridgedAt !== null,
-        reviewedByOperator: listening,
-      },
-    },
-  });
 
-  // Only free the slot if the operator is not sitting on the greeting.
-  if (!listening) await releaseActive(sessionId, callId);
+  // A fax or an unrecoverable tone has no greeting worth reading.
+  if (!machine) {
+    await hangup(callControlId).catch(() => {});
+    await db.call.update({
+      where: { id: callId },
+      data: { status: 'completed', endedAt: new Date() },
+    });
+    return 'automated';
+  }
 
-  return machine ? 'voicemail' : 'automated';
+  return 'voicemail';
 }
 
 // ---------------------------------------------------------------------------
@@ -774,6 +930,37 @@ export async function bridgeOldestHeld(sessionId: string): Promise<string | null
  * silently on somebody who waited is both rude and exactly the behaviour the
  * abandonment rules exist to discourage.
  */
+/**
+ * Hangs up voicemail legs that were kept alive to be read and never resolved.
+ *
+ * A machine is released from the operator immediately and left running only so
+ * its greeting can be transcribed. If no transcript arrives — silence, a beep
+ * with no words, transcription unavailable — nothing else would ever end that
+ * leg, and it would bill until the carrier gave up.
+ */
+export async function sweepUnreadVoicemails(): Promise<number> {
+  const cutoff = new Date(Date.now() - 25_000);
+
+  const stale = await db.call.findMany({
+    where: {
+      disposition: 'voicemail',
+      endedAt: null,
+      answeredAt: { lte: cutoff },
+      sessionId: { not: null },
+    },
+    select: { id: true, callControlId: true },
+  });
+
+  for (const call of stale) {
+    if (call.callControlId) await hangup(call.callControlId).catch(() => {});
+    await db.call.update({
+      where: { id: call.id },
+      data: { status: 'completed', endedAt: new Date() },
+    });
+  }
+  return stale.length;
+}
+
 export async function sweepExpiredHolds(): Promise<number> {
   const limit = await holdMaxSeconds();
   const cutoff = new Date(Date.now() - limit * 1000);
