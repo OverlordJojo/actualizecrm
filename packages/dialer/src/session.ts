@@ -17,6 +17,7 @@ import {
   isHumanVerdict,
   isMachineVerdict,
   isFaxVerdict,
+  findConferenceByName,
 } from '@actualizecrm/telephony';
 import { pickCallerId, operatorSipUri } from './routing';
 import type { SessionLegState } from './state';
@@ -448,7 +449,34 @@ export async function routeAmdVerdict(params: {
   }
 
   // A human. Everything below is the queued-owner rule.
-  const session = await db.dialSession.findUnique({ where: { id: sessionId } });
+  let session = await db.dialSession.findUnique({ where: { id: sessionId } });
+
+  // The room can die under us — a Telnyx conference ends when its last active
+  // participant leaves, and a session that has been idle between bursts is
+  // exactly when that happens. Rebuild rather than drop the person who just
+  // said hello.
+  if (session?.conferenceId && session.operatorLegId) {
+    const live = await findConferenceByName(
+      session.conferenceName ?? `actualizecrm-${sessionId}`,
+    );
+    if (!live) {
+      console.warn('[dialer] conference had ended — rebuilding around the operator');
+      try {
+        const rebuilt = await createConference({
+          callControlId: session.operatorLegId,
+          name: `actualizecrm-${sessionId}-${Date.now()}`,
+        });
+        await db.dialSession.update({
+          where: { id: sessionId },
+          data: { conferenceId: rebuilt.id, conferenceName: rebuilt.name },
+        });
+        session = await db.dialSession.findUnique({ where: { id: sessionId } });
+      } catch (err) {
+        console.error('[dialer] could not rebuild the conference', err);
+      }
+    }
+  }
+
   if (!session?.conferenceId) {
     // No room to put them in. Releasing is kinder than holding someone in
     // silence while we work out why.

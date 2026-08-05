@@ -68,9 +68,19 @@ export interface Conference {
  * So this is idempotent. If the name is taken, the existing conference is
  * looked up and returned, which makes a retry harmless rather than fatal.
  *
- * `start_conference_on_create: false` matters too. Left true, Telnyx starts the
- * conference the instant it is made and the operator hears hold music into an
- * empty room for the whole session.
+ * `start_conference_on_create: true` is load-bearing, and I had it backwards.
+ *
+ * With it false the conference sits in `init` and the operator, though a
+ * participant, is not an *active* one. The room only starts when a prospect
+ * enters — and when that prospect hangs up it has no active participants left,
+ * so Telnyx ends it. Every subsequent leg then failed with "this conference is
+ * no longer active and can't receive commands": not bridged, not held, silently
+ * dropped mid-session after the first call.
+ *
+ * True keeps the operator active for the whole session, which is exactly what
+ * anchoring on a conference is for. A lone participant in an active conference
+ * hears silence, not hold music — hold music is what `false` produces, which is
+ * what the old comment had inverted.
  */
 export async function createConference(params: {
   callControlId: string;
@@ -82,7 +92,7 @@ export async function createConference(params: {
       {
         name: params.name,
         call_control_id: params.callControlId,
-        start_conference_on_create: false,
+        start_conference_on_create: true,
       },
     );
 
