@@ -65,6 +65,7 @@ export function DialControls({
   governor,
   linesPerBurst,
   canHangup,
+  listeningToVoicemail,
 }: {
   lineState: LineState;
   muted: boolean;
@@ -89,6 +90,8 @@ export function DialControls({
   /// True the instant a prospect leg is bridged into the conference, false
   /// otherwise — driven by webhooks, never optimistic (§2.4).
   canHangup: boolean;
+  /// The operator is hearing an answering machine, not a person.
+  listeningToVoicemail?: boolean;
   /// Seconds remaining before the dialer auto-advances, or null when idle.
   countdown: number | null;
   /// Seconds since the prospect answered, or null when not connected.
@@ -189,6 +192,20 @@ export function DialControls({
               </div>
             </>
           )}
+        </div>
+      )}
+
+      {/* A recording playing into the operator's ear with no explanation reads
+          as a bug. Say what it is, and that hanging up moves on. */}
+      {listeningToVoicemail && (
+        <div className="rounded-lg border border-violet-800 bg-violet-950/40 px-3 py-2">
+          <p className="text-xs font-medium text-violet-200">
+            Answering machine — listening to the greeting
+          </p>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-violet-100/70">
+            Owner&rsquo;s voice or a front desk? Hang up when you have heard
+            enough; it is already logged as a voicemail.
+          </p>
         </div>
       )}
 

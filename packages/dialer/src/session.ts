@@ -50,19 +50,26 @@ export async function holdMaxSeconds(): Promise<number> {
 }
 
 /**
- * The identification a queued owner hears before the hold music.
+ * What a queued owner hears while they wait.
  *
- * Not decoration. 47 CFR 64.1200 requires an abandoned call to carry a recorded
- * identification of the caller within two seconds of the greeting, so this names
- * the business rather than saying "please hold" — and it doubles as the thing
- * that stops people hanging up into silence.
+ * 47 CFR 64.1200 requires an abandoned call to identify the caller within two
+ * seconds of the greeting, so this cannot simply be silence or music. But the
+ * wording matters more than the requirement admits: a person who says "hello"
+ * and gets a synthesised sentence back concludes it is a robocall, stops
+ * talking, and is gone before the operator ever reaches them. The prompt that
+ * exists to keep them on the line was losing them.
+ *
+ * So it is short, it says a person is coming, and it apologises — the three
+ * things that read as a human on the other end rather than a dialler. Long
+ * scripted greetings are what sound automated.
  */
 export async function holdPrompt(): Promise<string> {
   const configured = await getSetting('dialer.holdPrompt');
   if (configured.trim()) return configured.trim();
 
   const from = await getSetting('email.fromName');
-  return `Hello, this is ${from.trim() || 'ActualizeCRM'} calling. One moment please, connecting you now.`;
+  const who = from.trim() || 'ActualizeCRM';
+  return `Hi, it's ${who} — sorry, give me one second, I'm just here.`;
 }
 
 function legState(state: SessionLegState): string {
@@ -478,6 +485,18 @@ export async function routeAnswer(params: {
 }
 
 /**
+ * Whether this leg is the one the operator is actually listening to.
+ *
+ * Used to decide if a detected machine should be left playing for review or
+ * dropped silently: a greeting is only worth hearing if there is nobody real on
+ * the other line.
+ */
+async function operatorIsFree(sessionId: string, callId: string): Promise<boolean> {
+  const session = await db.dialSession.findUnique({ where: { id: sessionId } });
+  return session?.activeCallId === callId;
+}
+
+/**
  * Returns the session with a live conference, rebuilding one if it has ended.
  *
  * A Telnyx conference ends when its last active participant leaves, and a
@@ -538,15 +557,33 @@ export async function routeAmdVerdict(params: {
     return call.bridgedAt ? 'bridged' : call.heldAt ? 'held' : 'ignored';
   }
 
-  // A machine, now known. Remove it — the operator has heard a second or two of
-  // a greeting, which is the price of never making a human wait in silence.
-  await hangup(callControlId).catch(() => {});
+  const machine = isMachineVerdict(verdict);
+
+  /**
+   * A machine, now known. What happens next depends on whether the operator is
+   * free.
+   *
+   * A voicemail greeting is not noise to be filtered — it is evidence. Whether
+   * it is the owner's own voice or a front desk decides whether the lead is
+   * worth calling back, and that judgement is the operator's, not a model's.
+   * So when they are free, they stay on and listen.
+   *
+   * When they are already talking to somebody, the machine is dropped without a
+   * word. Interrupting a live conversation to play a recording at them is the
+   * one thing worse than not hearing it at all.
+   */
+  const listening = machine && (await operatorIsFree(sessionId, callId));
+
+  if (!listening) {
+    await hangup(callControlId).catch(() => {});
+  }
+
   await db.call.update({
     where: { id: callId },
     data: {
-      disposition: isMachineVerdict(verdict) ? 'voicemail' : 'automated_system',
-      status: 'completed',
-      endedAt: new Date(),
+      disposition: machine ? 'voicemail' : 'automated_system',
+      // A call the operator is still listening to has not ended.
+      ...(listening ? {} : { status: 'completed', endedAt: new Date() }),
     },
   });
   await db.contact.update({
@@ -561,18 +598,24 @@ export async function routeAmdVerdict(params: {
       contactId: call.contactId,
       type: 'disposition',
       direction: 'outbound',
-      summary: isMachineVerdict(verdict)
-        ? 'Reached a machine — dropped once detection confirmed it'
-        : 'Reached a fax or modem — dropped once detection confirmed it',
+      summary: listening
+        ? 'Reached a machine — playing the greeting for review'
+        : machine
+          ? 'Reached a machine — dropped, the operator was on another call'
+          : 'Reached a fax or modem — dropped once detection confirmed it',
       callId,
-      meta: { amdResult: verdict, bridgedFirst: call.bridgedAt !== null },
+      meta: {
+        amdResult: verdict,
+        bridgedFirst: call.bridgedAt !== null,
+        reviewedByOperator: listening,
+      },
     },
   });
 
-  // If it was the one the operator was on, free the slot so the loop advances.
-  await releaseActive(sessionId, callId);
+  // Only free the slot if the operator is not sitting on the greeting.
+  if (!listening) await releaseActive(sessionId, callId);
 
-  return isMachineVerdict(verdict) ? 'voicemail' : 'automated';
+  return machine ? 'voicemail' : 'automated';
 }
 
 // ---------------------------------------------------------------------------

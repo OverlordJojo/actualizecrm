@@ -47,6 +47,7 @@ interface SessionView {
     contactId: string;
     toE164: string;
     bridgedAt: string;
+    isVoicemail: boolean;
   } | null;
   ringing: {
     callId: string;
@@ -796,6 +797,8 @@ export function useDialSession({
     ringingLeads,
     /// Drives Hang up. Real leg state from webhooks — never optimistic (§2.4).
     canHangup: Boolean(view?.active),
+    /// True while the operator is hearing a machine's greeting, not a person.
+    listeningToVoicemail: Boolean(view?.active?.isVoicemail),
     resolved: view?.resolved ?? [],
     callerId: null as string | null,
     activeCallId: view?.active?.callId ?? null,

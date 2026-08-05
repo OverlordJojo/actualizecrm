@@ -70,6 +70,10 @@ export interface SessionView {
     callControlId: string | null;
     toE164: string;
     bridgedAt: string;
+    /// The operator is listening to an answering machine's greeting rather than
+    /// talking to a person. They decide from the voice whether it is the owner
+    /// or a front desk, and whether it is worth calling back.
+    isVoicemail: boolean;
   } | null;
 
   /// Legs currently ringing in the open burst, for the side-by-side cards
@@ -131,6 +135,7 @@ export async function sessionView(sessionId: string): Promise<SessionView | null
           callControlId: active.callControlId,
           toE164: active.toE164,
           bridgedAt: active.bridgedAt!.toISOString(),
+          isVoicemail: active.disposition === 'voicemail',
         }
       : null,
 

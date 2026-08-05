@@ -276,6 +276,7 @@ export function DialerClient({
           governor={call.governor}
           linesPerBurst={call.linesPerBurst}
           canHangup={call.canHangup}
+          listeningToVoicemail={call.listeningToVoicemail}
         />
       </div>
 
