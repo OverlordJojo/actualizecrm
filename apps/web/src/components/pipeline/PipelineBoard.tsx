@@ -14,6 +14,7 @@ import { LeadCard } from './LeadCard';
 import { StageColumn } from './StageColumn';
 import { TRASH_ZONE_ID, type BoardData, type BoardLead, type BoardStage } from './types';
 import { TrashZone } from '@/components/dialer/TrashToast';
+import { ContactSlideOver } from '@/components/contact/ContactSlideOver';
 
 export function PipelineBoard({
   initial,
@@ -38,6 +39,9 @@ export function PipelineBoard({
   const [pipelines, setPipelines] = useState(initial.pipelines);
   const [activeId, setActiveId] = useState(initial.activePipelineId);
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [openLeadId, setOpenLeadId] = useState<string | null>(null);
+  /// §3.9 — bulk selection, offered only on the dial queue.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showDealValue, setShowDealValue] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -118,6 +122,42 @@ export function PipelineBoard({
         [lead.firstName, lead.lastName].filter(Boolean).join(' ') || lead.phone,
       stageId: fromStage?.id ?? null,
     });
+  }
+
+  /**
+   * Removes everything selected (§3.9).
+   *
+   * Confirms with the exact count, because this is the one action on the board
+   * that touches many leads at once and a misclick on "Select all" is easy.
+   * Removed, not deleted — history is kept and every one stays searchable.
+   */
+  async function removeSelected(columnLeads: BoardLead[]) {
+    const ids = columnLeads.filter((l) => selected.has(l.id)).map((l) => l.id);
+    if (ids.length === 0) return;
+    if (
+      !window.confirm(
+        `Remove ${ids.length} lead${ids.length === 1 ? '' : 's'} from the pipeline?\n\n` +
+          'Their conversation history is kept and they stay searchable.',
+      )
+    ) {
+      return;
+    }
+
+    setStages((prev) =>
+      prev.map((s) => ({ ...s, leads: s.leads.filter((l) => !ids.includes(l.id)) })),
+    );
+    setSelected(new Set());
+
+    await Promise.all(
+      ids.map((contactId) =>
+        fetch('/api/contacts/remove', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contactId, reason: 'not_interested' }),
+        }).catch(() => {}),
+      ),
+    );
+    loadPipeline(activeId);
   }
 
   async function handleDragEnd(event: DragEndEvent) {
@@ -313,6 +353,20 @@ export function PipelineBoard({
               // calls go out in. Saying so is what makes dragging a card to the
               // top a deliberate act rather than a tidy-up (§3.2).
               caption={i === 0 ? 'dial order — top first' : undefined}
+              onOpenLead={setOpenLeadId}
+              // Only the first column. Bulk-removing from Booked is not a
+              // thing anybody wants to do quickly.
+              selectable={i === 0}
+              selectedIds={i === 0 ? selected : undefined}
+              onSelectLead={(leadId, on) =>
+                setSelected((prev) => {
+                  const next = new Set(prev);
+                  on ? next.add(leadId) : next.delete(leadId);
+                  return next;
+                })
+              }
+              onSelectAll={() => setSelected(new Set(stage.leads.map((l) => l.id)))}
+              onRemoveSelected={() => removeSelected(stage.leads)}
               editable
               onRename={(name) => renameStage(stage.id, name)}
               onRecolor={(color) => recolorStage(stage.id, color)}
@@ -322,6 +376,13 @@ export function PipelineBoard({
         </div>
 
         <TrashZone active={draggingId !== null} />
+
+        {/* §3.6 — clicking a card opens everything about the lead. */}
+        <ContactSlideOver
+          contactId={openLeadId}
+          onClose={() => setOpenLeadId(null)}
+          onChanged={() => loadPipeline(activeId)}
+        />
 
         <DragOverlay dropAnimation={null}>
           {draggingLead && (

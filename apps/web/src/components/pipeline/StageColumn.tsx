@@ -25,6 +25,12 @@ export function StageColumn({
   onCallLeadId,
   aiSuggested,
   caption,
+  onOpenLead,
+  selectable,
+  selectedIds,
+  onSelectLead,
+  onSelectAll,
+  onRemoveSelected,
   showDealValue,
   editable,
   onRename,
@@ -42,6 +48,14 @@ export function StageColumn({
   aiSuggested?: boolean;
   /// Small note under the column name — used to mark the dial queue (§3.2).
   caption?: string;
+  /// Opens a lead's detail view (§3.6).
+  onOpenLead?: (leadId: string) => void;
+  /// Bulk selection, offered only on the dial queue (§3.9).
+  selectable?: boolean;
+  selectedIds?: Set<string>;
+  onSelectLead?: (leadId: string, selected: boolean) => void;
+  onSelectAll?: () => void;
+  onRemoveSelected?: () => void;
   showDealValue: boolean;
   /// The Unassigned column is not a real stage, so it cannot be renamed or
   /// deleted.
@@ -197,11 +211,37 @@ export function StageColumn({
             : 'border-ink-800 bg-ink-950/40',
         )}
       >
+        {/* §3.9 — bulk controls, only while something is selected. A toolbar
+            that is always there is a toolbar in the way. */}
+        {selectable && (selectedIds?.size ?? 0) > 0 && (
+          <div className="sticky top-0 z-10 mb-1 flex items-center gap-2 rounded-lg border border-brand-800 bg-brand-950/80 px-2 py-1.5 backdrop-blur">
+            <span className="text-[11px] font-medium text-brand-200">
+              {selectedIds?.size} selected
+            </span>
+            <button
+              className="text-[10px] text-brand-300 underline"
+              onClick={onSelectAll}
+            >
+              Select all
+            </button>
+            <button
+              className="ml-auto rounded px-1.5 py-0.5 text-[10px] text-red-300 hover:bg-red-950/60"
+              onClick={onRemoveSelected}
+            >
+              Remove
+            </button>
+          </div>
+        )}
+
         {leads.map((lead) => (
           <LeadCard
             key={lead.id}
             lead={lead}
             isOnCall={lead.id === onCallLeadId}
+            onOpen={onOpenLead}
+            selectable={selectable}
+            selected={selectedIds?.has(lead.id)}
+            onSelect={onSelectLead}
           />
         ))}
 

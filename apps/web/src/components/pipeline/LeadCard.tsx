@@ -11,6 +11,10 @@ export function LeadCard({
   lead,
   isOnCall,
   overlay,
+  onOpen,
+  selectable,
+  selected,
+  onSelect,
 }: {
   lead: BoardLead;
   /// The lead currently on the phone keeps a persistent outline so it stays
@@ -18,6 +22,12 @@ export function LeadCard({
   isOnCall?: boolean;
   /// Rendered inside the drag overlay rather than in a column.
   overlay?: boolean;
+  /// Opens the full detail view (§3.6).
+  onOpen?: (leadId: string) => void;
+  /// Bulk selection in the New column (§3.9).
+  selectable?: boolean;
+  selected?: boolean;
+  onSelect?: (leadId: string, selected: boolean) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: lead.id,
@@ -34,8 +44,14 @@ export function LeadCard({
       {...listeners}
       {...attributes}
       style={{ transform: CSS.Translate.toString(transform) }}
+      // A click opens the lead; a drag moves it. The 4px activation distance on
+      // the sensor is what keeps the two apart — without it every click starts
+      // a drag and the card can never be opened.
+      onClick={() => {
+        if (!overlay && !isDragging) onOpen?.(lead.id);
+      }}
       className={cn(
-        'group cursor-grab select-none rounded-lg border bg-ink-900 px-2.5 py-2 active:cursor-grabbing',
+        'group relative cursor-grab select-none rounded-lg border bg-ink-900 px-2.5 py-2 active:cursor-grabbing',
         isOnCall
           ? 'border-brand-500 ring-1 ring-brand-500'
           : 'border-ink-800 hover:border-ink-700',
