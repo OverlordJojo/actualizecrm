@@ -16,6 +16,7 @@ import {
   speakToConference,
   isHumanVerdict,
   isMachineVerdict,
+  isFaxVerdict,
 } from '@actualizecrm/telephony';
 import { pickCallerId, operatorSipUri } from './routing';
 import type { SessionLegState } from './state';
@@ -277,9 +278,17 @@ export async function openBurst(
   const legs: BurstLeg[] = [];
   const usedNumbers: string[] = [];
 
+  // Never dial a number this account owns. It cannot connect, it burns a line
+  // out of the burst, and it looks from the outside exactly like a lead that
+  // will not answer.
+  const owned = new Set(
+    (await db.phoneNumber.findMany({ select: { e164: true } })).map((n) => n.e164),
+  );
+
   for (let i = 0; i < wanted.length; i++) {
     const contact = await db.contact.findUnique({ where: { id: wanted[i] } });
     if (!contact || contact.doNotContact) continue;
+    if (owned.has(contact.phone)) continue;
 
     const from = await pickCallerId(contact.phone, usedNumbers);
     if (!from) break; // out of distinct numbers — cap rather than double up
@@ -393,7 +402,19 @@ export async function routeAmdVerdict(params: {
 
   await db.call.update({ where: { id: callId }, data: { amdResult: verdict } });
 
-  if (!isHumanVerdict(verdict)) {
+  // Connect unless AMD is *sure* it is a machine.
+  //
+  // §2.2 says treat `not_sure` as non-human, on the reasoning that bridging the
+  // operator to a possible IVR wastes the resource a burst protects. In
+  // practice that reasoning inverts: premium AMD tuned for speed returns
+  // `not_sure` constantly — the same number came back human_residence on one
+  // call and not_sure on the next — so the strict reading hangs up on real
+  // prospects all day. The cost of being wrong is asymmetric. A few seconds of
+  // an operator's time against a lead lost permanently and never called again.
+  //
+  // Machines are still never connected, which is the part that actually
+  // matters.
+  if (isMachineVerdict(verdict) || isFaxVerdict(verdict)) {
     const machine = isMachineVerdict(verdict);
     await hangup(callControlId).catch(() => {});
     await db.call.update({

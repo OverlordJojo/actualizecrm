@@ -204,9 +204,13 @@ export function amdParams() {
   return {
     answering_machine_detection: 'premium' as const,
     answering_machine_detection_config: {
-      total_analysis_time_millis: 5000,
-      after_greeting_silence_millis: 800,
-      between_words_silence_millis: 50,
+      // Longer than the original 5000. Speed was being bought with accuracy,
+      // and an undecided verdict is worth less than a slightly later one: the
+      // same number came back human_residence on one call and not_sure on the
+      // next purely because the detector ran out of time.
+      total_analysis_time_millis: 8000,
+      after_greeting_silence_millis: 1000,
+      between_words_silence_millis: 75,
       greeting_duration_millis: 3500,
     },
   };
@@ -360,4 +364,11 @@ export function isHumanVerdict(verdict: string | null | undefined): boolean {
 export function isMachineVerdict(verdict: string | null | undefined): boolean {
   const v = (verdict ?? '').toLowerCase();
   return v === 'machine' || v.startsWith('machine_');
+}
+
+/// Fax and modem tones. Never worth connecting an operator to, and unlike
+/// `not_sure` there is no chance a person is behind it.
+export function isFaxVerdict(verdict: string | null | undefined): boolean {
+  const v = (verdict ?? '').toLowerCase();
+  return v.includes('fax') || v.includes('modem');
 }
