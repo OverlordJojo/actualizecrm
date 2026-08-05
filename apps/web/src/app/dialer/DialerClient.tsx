@@ -123,6 +123,32 @@ export function DialerClient({
     [],
   );
 
+  /**
+   * Removes the lead currently on screen (§3.3).
+   *
+   * Removed, not deleted — the contact and its whole conversation history stay
+   * searchable, and there are ten seconds to take it back. The card it came
+   * from is remembered so Undo puts it back where it was rather than in New.
+   */
+  const removeLead = useCallback(
+    async (lead: { id: string; firstName: string | null; lastName: string | null; phone: string; stageId: string | null }) => {
+      setTrashed({
+        contactId: lead.id,
+        name: [lead.firstName, lead.lastName].filter(Boolean).join(' ') || lead.phone,
+        stageId: lead.stageId,
+        expiresAt: Date.now() + 10_000,
+      });
+      await fetch('/api/contacts/remove', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contactId: lead.id, reason: 'not_interested' }),
+      }).catch(() => {});
+      refreshBoard();
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
   const saveNotes = useCallback(async (leadId: string, notes: string) => {
     await fetch('/api/contacts/notes', {
       method: 'POST',
@@ -199,6 +225,7 @@ export function DialerClient({
           visibleCustomFields={visibleCustomFields}
           onNotesChange={saveNotes}
           onFieldChange={saveField}
+          onRemove={removeLead}
           bookingPanel={
             <>
               <SuggestionChips

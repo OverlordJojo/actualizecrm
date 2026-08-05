@@ -9,7 +9,6 @@ import {
   useSensors,
   type DragEndEvent,
   type DragStartEvent,
-  type DragOverEvent,
 } from '@dnd-kit/core';
 import { LeadCard } from './LeadCard';
 import { StageColumn } from './StageColumn';
@@ -39,7 +38,6 @@ export function PipelineBoard({
   const [pipelines, setPipelines] = useState(initial.pipelines);
   const [activeId, setActiveId] = useState(initial.activePipelineId);
   const [draggingId, setDraggingId] = useState<string | null>(null);
-  const [overTrash, setOverTrash] = useState(false);
   const [showDealValue, setShowDealValue] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -79,10 +77,6 @@ export function PipelineBoard({
 
   function handleDragStart(event: DragStartEvent) {
     setDraggingId(String(event.active.id));
-  }
-
-  function handleDragOver(event: DragOverEvent) {
-    setOverTrash(event.over ? String(event.over.id) === TRASH_ZONE_ID : false);
   }
 
   /**
@@ -133,7 +127,6 @@ export function PipelineBoard({
     onManualStageChoice?.();
     const leadId = String(event.active.id);
     setDraggingId(null);
-    setOverTrash(false);
 
     const destination = event.over ? String(event.over.id) : null;
     if (!destination) return;
@@ -300,7 +293,6 @@ export function PipelineBoard({
       <DndContext
         sensors={sensors}
         onDragStart={handleDragStart}
-        onDragOver={handleDragOver}
         onDragEnd={handleDragEnd}
       >
         {/* No Unassigned column (§3.1). It was never a stage, only the absence
@@ -329,7 +321,7 @@ export function PipelineBoard({
           ))}
         </div>
 
-        <TrashZone active={draggingId !== null} over={overTrash} />
+        <TrashZone active={draggingId !== null} />
 
         <DragOverlay dropAnimation={null}>
           {draggingLead && (

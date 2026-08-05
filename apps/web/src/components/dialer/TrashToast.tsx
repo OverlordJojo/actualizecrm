@@ -1,6 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useDroppable } from '@dnd-kit/core';
+import { cn } from '@/lib/cn';
+import { TRASH_ZONE_ID } from '@/components/pipeline/types';
 
 /**
  * The undo window for a trashed lead (§3.3, §3.4).
@@ -62,24 +65,36 @@ export function TrashToast({
 /**
  * The drop target that animates in while a card is being dragged (§3.3).
  *
- * Only rendered mid-drag. A permanent trash can invites accidental drops, and
- * one that appears with the drag makes the gesture's destination obvious at the
- * moment the operator is looking for it.
+ * **It has to be a registered droppable.** This was previously a styled div
+ * with `pointer-events-none`, so dnd-kit had nothing to match against and
+ * `event.over` could never be the trash — dropping a lead here did nothing at
+ * all, silently, every time. It looked like a drop zone and was a picture of
+ * one.
+ *
+ * Only rendered mid-drag: a permanent trash can invites accidental drops, while
+ * one that appears with the gesture puts the destination where the operator is
+ * already looking.
  */
-export function TrashZone({ active, over }: { active: boolean; over: boolean }) {
+export function TrashZone({ active }: { active: boolean }) {
+  const { setNodeRef, isOver } = useDroppable({ id: TRASH_ZONE_ID });
+
   if (!active) return null;
 
   return (
-    <div className="pointer-events-none fixed bottom-8 left-1/2 z-40 -translate-x-1/2">
+    <div
+      ref={setNodeRef}
+      className="fixed bottom-8 left-1/2 z-40 -translate-x-1/2"
+    >
       <div
-        className={
-          over
-            ? 'flex items-center gap-2 rounded-xl border-2 border-red-500 bg-red-950/80 px-6 py-3 transition-all'
-            : 'flex items-center gap-2 rounded-xl border-2 border-dashed border-ink-600 bg-ink-900/90 px-6 py-3 transition-all'
-        }
+        className={cn(
+          'flex items-center gap-2 rounded-xl border-2 px-8 py-4 transition-all',
+          isOver
+            ? 'scale-110 border-red-500 bg-red-950/90'
+            : 'border-dashed border-ink-600 bg-ink-900/90',
+        )}
       >
-        <span className={over ? 'text-sm text-red-200' : 'text-sm text-ink-300'}>
-          {over ? 'Release to remove' : 'Drag here to remove'}
+        <span className={isOver ? 'text-sm font-medium text-red-200' : 'text-sm text-ink-300'}>
+          {isOver ? 'Release to remove' : 'Drag here to remove'}
         </span>
       </div>
     </div>

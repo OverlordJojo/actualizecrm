@@ -49,6 +49,7 @@ export function ActiveLeadCard({
   onNotesChange,
   onFieldChange,
   bookingPanel,
+  onRemove,
 }: {
   lead: ActiveLead | null;
   visibleCustomFields: VisibleCustomField[];
@@ -57,6 +58,8 @@ export function ActiveLeadCard({
   /// The booking panel (§2.4) is supplied by the page so this component does
   /// not need to know about Google Calendar.
   bookingPanel?: React.ReactNode;
+  /// Removes the lead from the pipeline (§3.3). Undoable for ten seconds.
+  onRemove?: (lead: ActiveLead) => void;
 }) {
   const [draft, setDraft] = useState<Partial<Record<EditableField, string>>>({});
   const [notes, setNotes] = useState('');
@@ -172,6 +175,19 @@ export function ActiveLeadCard({
         >
           {saveState === 'saving' ? 'saving…' : saveState === 'saved' ? 'saved' : ''}
         </span>
+
+        {/* Removing the lead in front of you should not require finding it on
+            the board and dragging it — mid-call, that is a gesture nobody has a
+            spare hand for. Undoable for ten seconds either way (§3.3). */}
+        {onRemove && (
+          <button
+            className="shrink-0 rounded px-1.5 py-0.5 text-[10px] text-ink-500 transition-colors hover:bg-red-950/60 hover:text-red-300"
+            onClick={() => onRemove(lead)}
+            title="Remove this lead from the pipeline — history is kept and it stays searchable"
+          >
+            Remove
+          </button>
+        )}
       </div>
 
       {fieldError && (
