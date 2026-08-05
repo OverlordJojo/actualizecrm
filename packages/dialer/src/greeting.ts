@@ -274,3 +274,47 @@ export function extractGreetingName(transcript: string): GreetingName | null {
 
   return null;
 }
+
+
+/**
+ * The signal that needs neither words nor tone: **recordings do not stop.**
+ *
+ * A person who picks up says a short thing and waits — "Hello?", "Bob
+ * speaking", four or five words and then silence, because they are expecting an
+ * answer. A recording delivers its whole script without yielding, because it is
+ * not expecting anything.
+ *
+ * That difference is behavioural, so it survives everything that defeats the
+ * other two detectors. It does not care what language the greeting is in,
+ * whether the voice is synthetic or a person who recorded themselves years ago,
+ * whether the transcript is garbled, or whether the carrier uses wording nobody
+ * has added to a list. A convincing human-sounding recording still monologues.
+ *
+ * It is the same insight AMD uses acoustically, applied to the timeline instead
+ * — and because it is measured from transcript arrival rather than audio, it
+ * catches the cases where AMD's acoustic judgement went the wrong way.
+ *
+ * Deliberately generous. Someone answering with a long "Hello, this is Josh
+ * over at Modern Landscape, how can I help you?" is a real person taking six
+ * seconds, so the threshold sits well past anything a person says in one
+ * breath while still landing far inside a carrier greeting.
+ */
+export const MONOLOGUE_SECONDS = 7;
+export const MONOLOGUE_WORDS = 22;
+
+export interface SpeechShape {
+  /// Seconds the far end has been speaking since they answered.
+  speakingSeconds: number;
+  /// Words they have produced in that time.
+  words: number;
+  /// True once the operator has said anything — after which this test is moot,
+  /// because a conversation is underway.
+  operatorSpoke: boolean;
+}
+
+export function isMonologue(shape: SpeechShape): boolean {
+  if (shape.operatorSpoke) return false;
+  return (
+    shape.speakingSeconds >= MONOLOGUE_SECONDS || shape.words >= MONOLOGUE_WORDS
+  );
+}

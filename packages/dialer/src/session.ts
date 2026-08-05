@@ -27,6 +27,7 @@ import { pickCallerId, operatorSipUri } from './routing';
 import {
   classifyGreeting,
   extractGreetingName,
+  isMonologue,
   type GreetingKind,
 } from './greeting';
 import type { SessionLegState } from './state';
@@ -631,7 +632,32 @@ export async function screenVoicemailGreeting(params: {
   // Either signal is enough. A name is proof of a person; a first-person
   // greeting is proof somebody recorded it themselves. Both mean a mailbox
   // worth calling back, whether or not it names anyone.
-  const kind = name ? 'human' : classifyGreeting(transcript);
+  let kind = name ? 'human' : classifyGreeting(transcript);
+
+  /**
+   * Third detector: they never stopped talking.
+   *
+   * Words and tone can both be wrong — an unlisted carrier script, a recording
+   * made by a real person, a garbled transcript. This one only asks whether the
+   * far end behaved like somebody expecting an answer, and a recording never
+   * does. It is what catches the greetings the other two miss.
+   *
+   * Only ever escalates. It can turn an undecided greeting into a recording; it
+   * never overrules a positive read of the words, because "you've reached Josh"
+   * is a mailbox worth calling back however long it runs on.
+   */
+  if (kind === 'unknown' && call.answeredAt) {
+    const speakingSeconds = (Date.now() - call.answeredAt.getTime()) / 1000;
+    const segments = Array.isArray(call.transcriptSegments)
+      ? (call.transcriptSegments as unknown as { speaker: string }[])
+      : [];
+    const monologue = isMonologue({
+      speakingSeconds,
+      words: transcript.trim().split(/\s+/).filter(Boolean).length,
+      operatorSpoke: segments.some((seg) => seg.speaker === 'You'),
+    });
+    if (monologue) kind = 'carrier';
+  }
 
   // Still listening. Give the greeting another segment to identify itself.
   if (kind === 'unknown' && !name) return 'unknown';
