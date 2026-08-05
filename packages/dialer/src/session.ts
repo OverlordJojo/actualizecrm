@@ -14,6 +14,8 @@ import {
   holdParticipants,
   unholdParticipants,
   speakToConference,
+  isHumanVerdict,
+  isMachineVerdict,
 } from '@actualizecrm/telephony';
 import { pickCallerId, operatorSipUri } from './routing';
 import type { SessionLegState } from './state';
@@ -391,8 +393,8 @@ export async function routeAmdVerdict(params: {
 
   await db.call.update({ where: { id: callId }, data: { amdResult: verdict } });
 
-  if (verdict !== 'human') {
-    const machine = verdict === 'machine';
+  if (!isHumanVerdict(verdict)) {
+    const machine = isMachineVerdict(verdict);
     await hangup(callControlId).catch(() => {});
     await db.call.update({
       where: { id: callId },

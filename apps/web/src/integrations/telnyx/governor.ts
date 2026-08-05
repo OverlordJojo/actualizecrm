@@ -94,7 +94,10 @@ export async function abandonmentState(): Promise<GovernorState> {
         // A human answer is either a leg AMD called human, or one that was
         // answered and never classified as a machine.
         OR: [
-          { amdResult: 'human' },
+          // Premium AMD reports human_residence / human_business; matching only
+          // "human" made the abandonment denominator far too small, which
+          // flatters the rate the governor exists to police.
+          { amdResult: { startsWith: 'human' } },
           { AND: [{ answeredAt: { not: null } }, { amdResult: null }] },
         ],
       },

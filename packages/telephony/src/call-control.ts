@@ -330,3 +330,34 @@ export function decodeClientState(
     return null;
   }
 }
+
+/**
+ * Whether an AMD verdict means a person picked up.
+ *
+ * **Premium AMD does not return `"human"`.** It distinguishes the kind of
+ * human: `human_residence` and `human_business`. Testing for `"human"` alone
+ * therefore classifies every real person as a machine — which is exactly what
+ * happened, and why a burst could reach somebody and hang up on them before the
+ * operator ever heard it.
+ *
+ * `human` is still accepted because the basic detector does return it, and a
+ * connection is only ever configured per call.
+ */
+export function isHumanVerdict(verdict: string | null | undefined): boolean {
+  if (!verdict) return false;
+  const v = verdict.toLowerCase();
+  return v === 'human' || v.startsWith('human_');
+}
+
+/**
+ * Whether an AMD verdict means a machine took the call.
+ *
+ * Everything that is neither human nor machine — `not_sure`, `silence`,
+ * `fax_detected` — is deliberately *not* machine. §2.2 treats those as
+ * automated systems, because bridging the operator to something that might be
+ * an IVR wastes the one resource a burst exists to protect.
+ */
+export function isMachineVerdict(verdict: string | null | undefined): boolean {
+  const v = (verdict ?? '').toLowerCase();
+  return v === 'machine' || v.startsWith('machine_');
+}

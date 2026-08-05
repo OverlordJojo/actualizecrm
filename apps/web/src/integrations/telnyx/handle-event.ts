@@ -7,6 +7,7 @@ import {
   encodeClientState,
   decodeClientState,
 } from '@/integrations/telnyx/recording';
+import { isHumanVerdict } from '@actualizecrm/telephony';
 import { archiveRecording, processCall } from '@/integrations/ai/pipeline';
 import { resolveRecording, playbackUrl } from '@/integrations/audio/voicemail';
 import { formatPhone } from '@/lib/phone';
@@ -482,7 +483,8 @@ async function performDrop(
     return;
   }
 
-  const reachedPerson = verdict === 'human';
+  // Premium AMD reports human_residence / human_business, not "human".
+  const reachedPerson = isHumanVerdict(verdict);
 
   try {
     const url = await playbackUrl(recording);

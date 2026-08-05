@@ -1,4 +1,5 @@
 import { db, getSetting, asNumber } from '@actualizecrm/db';
+import { isHumanVerdict } from '@actualizecrm/telephony';
 
 /**
  * Owner attribution (§6.2), decided deterministically at call end.
@@ -57,7 +58,9 @@ export async function finalizeAttribution(callId: string): Promise<AttributionRe
   const threshold = await ownerThresholdSeconds();
 
   // Every condition is a stored fact. None of them consults a model.
-  const humanAnswered = call.amdResult === 'human';
+  // Premium AMD reports human_residence / human_business, never plain
+  // "human" — the same mistake here would zero every owner connect.
+  const humanAnswered = isHumanVerdict(call.amdResult);
   const reachedOperator = call.bridgedAt !== null;
   const heldLongEnough = call.durationSec > threshold;
   const disqualified = DISQUALIFYING.has(call.disposition ?? '');
