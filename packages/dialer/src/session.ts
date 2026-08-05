@@ -775,12 +775,17 @@ export async function routeAmdVerdict(params: {
 
   await db.call.update({ where: { id: callId }, data: { amdResult: verdict } });
 
-  // A person, or something AMD could not name. Either way they stay: the leg
-  // was already bridged on answer, and `not_sure` is far too common to hang up
-  // on — the same number has come back human_residence on one call and not_sure
-  // on the next.
+  /**
+   * A person reaches the operator. Nothing else does.
+   *
+   * `not_sure` counts as a person: the same number has come back
+   * human_residence on one call and not_sure on the next, and dropping an
+   * uncertain verdict hangs up on real people. A machine that slips through as
+   * not_sure is caught a second later by the greeting screen, which reads what
+   * was said rather than guessing from tone.
+   */
   if (!isMachineVerdict(verdict) && !isFaxVerdict(verdict)) {
-    return call.bridgedAt ? 'bridged' : call.heldAt ? 'held' : 'ignored';
+    return routeAnswer({ sessionId, callId, callControlId });
   }
 
   const machine = isMachineVerdict(verdict);
@@ -798,8 +803,8 @@ export async function routeAmdVerdict(params: {
    * own for a few seconds, purely to transcribe. `screenVoicemailGreeting` then
    * decides what it was and files the lead accordingly.
    */
-  // A bridged machine is dropped by hanging its leg up; the bridge ends with
-  // it and the operator is free. There is no room to leave.
+  // Never bridged, so there is no slot to free — but clear it defensively in
+  // case detection arrived after a race put this leg in the active position.
   await releaseActive(sessionId, callId);
 
   await db.call.update({
@@ -1046,12 +1051,53 @@ export async function sweepExpiredHolds(): Promise<number> {
  * fixes: an unregistered softphone is something they can act on immediately,
  * while a rejected route is a configuration problem.
  */
+/**
+ * Puts the operator's leg back after a bridged call ends.
+ *
+ * Telnyx tears down both sides of a bridge together, so hanging up a prospect
+ * takes the operator's leg with it — which ended the whole session on the first
+ * hangup. The leg is the session, so it is re-established rather than mourned.
+ *
+ * Only while there is still a session to serve. A leg re-dialled after the
+ * operator pressed End would ring them for no reason.
+ */
+export async function restoreOperatorLeg(sessionId: string): Promise<boolean> {
+  const session = await db.dialSession.findUnique({ where: { id: sessionId } });
+  if (!session || session.status !== 'live') return false;
+
+  const sipUri = await operatorSipUri();
+  const from = await pickCallerId('+10000000000');
+  if (!sipUri || !from) return false;
+
+  try {
+    const leg = await originateOperatorLeg({
+      sipUri,
+      from: from.e164,
+      connectionId: requireCallControlAppId(),
+      webhookUrl: requireWebhookUrl(),
+      clientState: legState({ k: 'session', sessionId, role: 'operator' }),
+    });
+    await db.dialSession.update({
+      where: { id: sessionId },
+      data: { operatorLegId: leg.callControlId },
+    });
+    return true;
+  } catch (err) {
+    console.error('[dialer] could not restore the operator leg', err);
+    return false;
+  }
+}
+
 export async function recordOperatorLegFailure(
   sessionId: string,
   cause: string | null,
 ): Promise<void> {
   const session = await db.dialSession.findUnique({ where: { id: sessionId } });
-  if (!session || session.conferenceId) return;
+  // A session that reached `live` started fine; the operator leg ending after
+  // that is them finishing, not a failure. This used to test for a conference
+  // id — and once conferences were removed, every normal hangup was reported as
+  // a session that never started.
+  if (!session || session.status === 'live') return;
 
   const explanation = explainOperatorFailure(cause);
 

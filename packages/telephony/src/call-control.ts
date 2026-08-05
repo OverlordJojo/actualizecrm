@@ -204,12 +204,13 @@ export function amdParams() {
   return {
     answering_machine_detection: 'premium' as const,
     answering_machine_detection_config: {
-      // AMD no longer gates the connection — the leg is bridged on answer and
-      // this only removes machines afterwards — so accuracy is free. Nobody
-      // waits on this number any more.
-      total_analysis_time_millis: 8000,
-      after_greeting_silence_millis: 1000,
-      between_words_silence_millis: 75,
+      // AMD gates the connection again, so every millisecond here is silence
+      // paid for by whoever just said hello. Tuned for speed: anything it
+      // cannot name in time is treated as a person and connected, and a machine
+      // that slips through is caught by the greeting screen a moment later.
+      total_analysis_time_millis: 3200,
+      after_greeting_silence_millis: 600,
+      between_words_silence_millis: 50,
       greeting_duration_millis: 3500,
     },
   };

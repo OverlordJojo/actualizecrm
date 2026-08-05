@@ -259,15 +259,22 @@ async function handleSessionEvent(
         // The operator's leg going away ends the session, whatever the cause.
         // Leaving prospects in a conference nobody is coming back to is the
         // worst available outcome.
-        const { endSession, recordOperatorLegFailure } = await import(
-          '@actualizecrm/dialer'
-        );
+        const { endSession, recordOperatorLegFailure, restoreOperatorLeg } =
+          await import('@actualizecrm/dialer');
 
-        // A leg that ends *before* the conference exists never got answered, so
-        // the session never started. That is invisible from the operator's
-        // chair — no ringing, no error, no controls — and the carrier's cause is
-        // the only thing that says why.
+        // A leg that ends before the session ever went live never got answered.
+        // That is invisible from the operator's chair — no ringing, no error,
+        // no controls — and the carrier's cause is the only thing that says why.
         await recordOperatorLegFailure(sessionId, p.hangup_cause ?? null);
+
+        // Bridged legs die together, so hanging up a prospect takes the
+        // operator's leg with it. The leg *is* the session, so it is put back
+        // rather than the session being ended under them.
+        const restored = await restoreOperatorLeg(sessionId);
+        if (restored) {
+          return { handled: true, eventType, note: 'operator leg restored' };
+        }
+
         await endSession(sessionId).catch(() => {});
         return {
           handled: true,
@@ -284,9 +291,19 @@ async function handleSessionEvent(
   if (!callId) return { handled: false, eventType, note: 'prospect leg with no call id' };
 
   switch (eventType) {
-    // Connect on answer, immediately. Waiting for AMD costs several seconds of
-    // silence paid for by the person who just said hello, and they hang up.
-    // AMD still arrives and still removes machines.
+    /**
+     * Answering does not connect anybody (reverted, on the operator's
+     * instruction, and they are right).
+     *
+     * Bridging on answer removed the dead air and let every machine reach the
+     * operator's ear for the seconds AMD took to name it. Robotic voices on the
+     * line is a worse outcome than a pause: the pause costs a moment, the robot
+     * costs the operator's attention on every single dial.
+     *
+     * So the leg waits unbridged until detection speaks. AMD's window is cut to
+     * keep that wait short — accuracy is worth less here than speed, because
+     * anything AMD cannot name is treated as a person and connected anyway.
+     */
     case 'call.answered': {
       await db.call.updateMany({
         where: { id: callId, answeredAt: null },
@@ -298,8 +315,7 @@ async function handleSessionEvent(
       startTranscription(callControlId).catch((e) =>
         console.error('[telnyx] transcription_start failed', e),
       );
-      const routing = await routeAnswer({ sessionId, callId, callControlId });
-      return { handled: true, eventType, note: `answered → ${routing}` };
+      return { handled: true, eventType, note: 'answered — awaiting detection' };
     }
 
     case 'call.machine.detection.ended':
