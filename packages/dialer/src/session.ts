@@ -451,15 +451,34 @@ export async function routeAmdVerdict(params: {
     await joinConference({
       conferenceId: session.conferenceId,
       callControlId,
+      // **Starts the conference.** Created with start_conference_on_create
+      // false — otherwise the operator sits in hold music for the whole session
+      // — so something has to start it, and the first prospect to bridge is the
+      // moment audio is first needed. Without this every participant waits in
+      // silence: the call reads as connected and neither side can hear the
+      // other, which is exactly how it presented.
+      startConferenceOnEnter: true,
       clientState: legState({ k: 'session', sessionId, role: 'prospect', callId }),
     });
 
     // Unmute the operator only once a prospect is actually in the room.
+    //
+    // Retried rather than best-effort. A swallowed failure here leaves the
+    // operator talking into a muted line while the prospect hears nothing —
+    // indistinguishable from a broken call, and they will hang up.
     if (session.operatorLegId) {
-      await unmuteParticipants({
-        conferenceId: session.conferenceId,
-        callControlIds: [session.operatorLegId],
-      }).catch(() => {});
+      for (let i = 0; i < 3; i++) {
+        try {
+          await unmuteParticipants({
+            conferenceId: session.conferenceId,
+            callControlIds: [session.operatorLegId],
+          });
+          break;
+        } catch (err) {
+          if (i === 2) console.error('[dialer] could not unmute the operator', err);
+          else await new Promise((r) => setTimeout(r, 300));
+        }
+      }
     }
 
     await db.call.update({
@@ -474,6 +493,9 @@ export async function routeAmdVerdict(params: {
   }
 
   // Somebody else got there first: hold them, prompt them, and queue them.
+  // Deliberately does not start the conference: a queued owner is parked, not
+  // talking, and starting it from a held leg would open an audio path to
+  // somebody the operator has not been connected to yet.
   await joinConference({
     conferenceId: session.conferenceId,
     callControlId,
@@ -569,6 +591,17 @@ export async function bridgeOldestHeld(sessionId: string): Promise<string | null
     conferenceId: session.conferenceId,
     callControlIds: [next.callControlId],
   }).catch(() => {});
+
+  // A held caller being promoted may be the first live participant of all, if
+  // every earlier leg resolved to a machine. Starting the conference is
+  // idempotent, so doing it here costs nothing and closes that gap.
+  await joinConference({
+    conferenceId: session.conferenceId,
+    callControlId: next.callControlId,
+    startConferenceOnEnter: true,
+  }).catch(() => {
+    // Already a participant — expected, since they were joined on hold.
+  });
 
   if (session.operatorLegId) {
     await unmuteParticipants({

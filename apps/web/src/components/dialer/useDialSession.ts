@@ -213,8 +213,12 @@ export function useDialSession({
       }
     },
     onRinging: () => {
+      // The operator's own leg ringing is not a prospect ringing, so it does
+      // not start the ringback. Ringback follows server leg state below — that
+      // is the whole reason the tone used to keep playing after a connect: the
+      // browser's SDK state never changes when a *prospect* bridges, so nothing
+      // ever told it to stop.
       if (audio.mode === 'music') setRemoteAudioMuted(true);
-      ringAudio.onRinging();
     },
     onAnswered: () => {
       // The operator is in the conference. Their ears belong to the room now.
@@ -385,19 +389,39 @@ export function useDialSession({
     return () => clearInterval(t);
   }, [sessionId, refresh]);
 
-  // Pause and resume Spotify against the *bridged leg*, not the browser's line
-  // state — §4.2. The prospect is in the operator's ear the moment the server
-  // says the leg bridged.
-  const wasActive = useRef(false);
+  /**
+   * Ringback and music follow **server leg state**, not the browser's (§4.2).
+   *
+   * Three states, and each has exactly one correct sound:
+   *   - legs ringing, nobody bridged  → ringback (or Spotify in music mode)
+   *   - a prospect bridged            → silence, so the operator can talk
+   *   - neither                       → idle
+   *
+   * Driving this from the SDK was the bug behind "the ring tone doesn't turn
+   * off when a call connects". The browser sits in the conference unchanged
+   * while prospect legs come and go around it, so its own state never moves and
+   * nothing ever stopped the tone.
+   */
+  const audioPhase = useRef<'idle' | 'ringing' | 'connected'>('idle');
   useEffect(() => {
-    const active = Boolean(view?.active);
-    if (active === wasActive.current) return;
-    wasActive.current = active;
-    if (active) ringAudio.onAnswered();
+    const phase: 'idle' | 'ringing' | 'connected' = view?.active
+      ? 'connected'
+      : (view?.ringing.length ?? 0) > 0
+        ? 'ringing'
+        : 'idle';
+
+    if (phase === audioPhase.current) return;
+    const previous = audioPhase.current;
+    audioPhase.current = phase;
+
+    if (phase === 'ringing') ringAudio.onRinging();
+    else if (phase === 'connected') ringAudio.onAnswered();
     else ringAudio.onEnded();
-    if (!active) onCallEnded?.();
+
+    // The call is over the moment the bridged leg goes away, whoever ended it.
+    if (previous === 'connected' && phase !== 'connected') onCallEnded?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view?.active]);
+  }, [view?.active, view?.ringing.length]);
 
   // --- session control ------------------------------------------------------
 
