@@ -42,6 +42,16 @@ interface SessionView {
   conferenceId: string | null;
   linesPerBurst: number;
   failureReason: string | null;
+  stats: {
+    dials: number;
+    connects: number;
+    ownerConnects: number;
+    ownerRate: number;
+    booked: number;
+    interested: number;
+    voicemails: number;
+    talkTimeSec: number;
+  };
   active: {
     callId: string;
     contactId: string;
@@ -905,7 +915,18 @@ export function useDialSession({
     screenPopContactId,
     clearScreenPop: () => setScreenPopContactId(null),
     countdown,
-    stats,
+    // Server-counted, from call rows. A browser counter drifts the moment a
+    // request fails or the page is reloaded mid-session (§6.2).
+    stats: view?.stats
+      ? {
+          ...stats,
+          dials: view.stats.dials,
+          connects: view.stats.connects,
+          booked: view.stats.booked,
+          talkTimeSec: view.stats.talkTimeSec,
+        }
+      : stats,
+    sessionStats: view?.stats ?? null,
     index,
     dropping,
     dropVoicemail,

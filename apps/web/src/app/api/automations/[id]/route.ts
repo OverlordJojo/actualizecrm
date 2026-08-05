@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { validateAutomation } from '@/lib/automation-validation';
 import { z } from 'zod';
 import { db } from '@/lib/db';
 import { TRIGGER_TYPES, STEP_TYPES } from '@/lib/automations';
@@ -59,6 +60,8 @@ export async function PATCH(
   request: Request,
   { params }: { params: { id: string } },
 ) {
+  // §8.2 — the same gate as creation. An automation must not be switched on
+  // into a state where it can only fail.
   const parsed = patchSchema.safeParse(await request.json());
   if (!parsed.success) {
     return NextResponse.json({ error: 'Invalid automation.' }, { status: 400 });

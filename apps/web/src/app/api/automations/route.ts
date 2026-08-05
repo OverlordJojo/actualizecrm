@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { validateAutomation } from '@/lib/automation-validation';
 import { z } from 'zod';
 import { db } from '@/lib/db';
 import { TRIGGER_TYPES, STEP_TYPES } from '@/lib/automations';
@@ -48,6 +49,17 @@ export async function POST(request: Request) {
       { error: parsed.error.issues[0]?.message ?? 'Invalid automation.' },
       { status: 400 },
     );
+  }
+
+  // §8.2 — an automation that cannot possibly work is not savable. The failure
+  // it would otherwise produce arrives hours later as a dead job the operator
+  // can do nothing with, by which time the follow-up has not gone out.
+  const problems = await validateAutomation({
+    trigger: parsed.data.triggerType,
+    steps: parsed.data.steps as { type: string; config?: Record<string, unknown> }[],
+  });
+  if (problems.length > 0) {
+    return NextResponse.json({ problems }, { status: 422 });
   }
 
   const created = await db.automation.create({

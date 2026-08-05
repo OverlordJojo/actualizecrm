@@ -31,13 +31,6 @@ interface Run {
   contact: { id: string; firstName: string | null; lastName: string | null; phone: string } | null;
 }
 
-interface FailedJob {
-  id: string;
-  type: string;
-  error: string;
-  failedAt: string;
-  attempts: number;
-}
 
 const TRIGGER_LABEL: Record<string, string> = {
   disposition_set: 'Outcome set',
@@ -63,7 +56,6 @@ export function AutomationsClient() {
   const [error, setError] = useState<string | null>(null);
   const [openRunsFor, setOpenRunsFor] = useState<string | null>(null);
   const [runs, setRuns] = useState<Run[]>([]);
-  const [failed, setFailed] = useState<FailedJob[]>([]);
 
   const [options, setOptions] = useState({
     stages: [] as { id: string; name: string }[],
@@ -98,11 +90,6 @@ export function AutomationsClient() {
         smsBlockedReason: messaging?.reason ?? '',
       });
     });
-
-    fetch('/api/automations/failed')
-      .then((r) => r.json())
-      .then(setFailed)
-      .catch(() => {});
   }, [load]);
 
   async function save() {
@@ -305,37 +292,15 @@ export function AutomationsClient() {
             </ul>
           )}
 
-          {/* --- dead letters --- */}
-          {failed.length > 0 && (
-            <section>
-              <h2 className="mb-1.5 text-sm font-semibold text-ink-100">
-                Failed jobs
-              </h2>
-              <p className="mb-2 text-xs text-ink-500">
-                Jobs that exhausted their retries. A job that dies silently is
-                worse than one that dies loudly.
-              </p>
-              <ul className="space-y-1">
-                {failed.map((f) => (
-                  <li
-                    key={f.id}
-                    className="rounded-lg border border-red-950 bg-red-950/30 px-3 py-2"
-                  >
-                    <div className="flex items-baseline gap-2">
-                      <span className="font-mono text-[11px] text-red-300">
-                        {f.type}
-                      </span>
-                      <span className="ml-auto text-[10px] text-ink-500">
-                        {new Date(f.failedAt).toLocaleString()} · {f.attempts}{' '}
-                        attempts
-                      </span>
-                    </div>
-                    <p className="mt-0.5 text-[11px] text-ink-400">{f.error}</p>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
+          {/* §8.1 — the Failed Jobs table is gone.
+              It was a queue artifact leaking into the product. "voicemail.drop
+              exhausted retries" told the operator nothing they could act on and
+              externalised a problem that should have been prevented at save
+              time — which §8.2's validation now does. What survives retry is a
+              configuration problem, and it belongs on the automation that has
+              it, not in a list of dead jobs.
+              Technical detail is still reachable from the run log for
+              debugging; it is simply not the operator's first screen. */}
         </div>
       </div>
     </>

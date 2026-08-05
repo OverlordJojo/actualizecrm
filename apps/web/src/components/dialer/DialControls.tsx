@@ -65,6 +65,7 @@ export function DialControls({
   governor,
   linesPerBurst,
   canHangup,
+  sessionStats,
 }: {
   lineState: LineState;
   muted: boolean;
@@ -89,6 +90,17 @@ export function DialControls({
   /// True the instant a prospect leg is bridged into the conference, false
   /// otherwise — driven by webhooks, never optimistic (§2.4).
   canHangup: boolean;
+  /// Session figures counted from call rows on the server (§6.2).
+  sessionStats: {
+    dials: number;
+    connects: number;
+    ownerConnects: number;
+    ownerRate: number;
+    booked: number;
+    interested: number;
+    voicemails: number;
+    talkTimeSec: number;
+  } | null;
   /// Seconds remaining before the dialer auto-advances, or null when idle.
   countdown: number | null;
   /// Seconds since the prospect answered, or null when not connected.
@@ -336,20 +348,52 @@ export function DialControls({
         </div>
       </div>
 
-      {/* stats — one compact row so Region B never overflows into the board */}
-      <div className="mt-auto grid grid-cols-7 gap-1 border-t border-ink-800 pt-2">
-        <Stat label="Dials" value={stats.dials} />
-        <Stat label="Conn" value={stats.connects} />
-        <Stat label="Rate" value={`${connectRate}%`} />
-        <Stat label="Talk" value={formatDuration(stats.talkTimeSec)} />
-        <Stat label="/hr" value={dialsPerHour} />
-        <Stat label="Booked" value={stats.booked} tone="good" />
-        {/* §4.4 requires the rolling abandonment rate to be visible live. */}
+      {/* stats — one compact row so Region B never overflows into the board.
+          Owner pickup rate leads, because it is the only one that says whether
+          the hour was worth spending: dials measure effort, this measures
+          reaching the person who can actually say yes (§6.3). */}
+      <div className="mt-auto grid grid-cols-8 gap-1 border-t border-ink-800 pt-2">
         <Stat
-          label={linesPerBurst > 1 ? `Aband (${governor?.allowedLines ?? 1}L)` : 'Aband'}
-          value={governor ? `${(governor.rate * 100).toFixed(1)}%` : '—'}
-          tone={governor?.blocked ? 'bad' : undefined}
+          label="Owner"
+          value={
+            sessionStats && sessionStats.connects > 0
+              ? `${Math.round(sessionStats.ownerRate * 100)}%`
+              : '—'
+          }
+          tone={sessionStats && sessionStats.ownerConnects > 0 ? 'good' : undefined}
         />
+        <Stat label="Dials" value={sessionStats?.dials ?? stats.dials} />
+        <Stat label="Conn" value={sessionStats?.connects ?? stats.connects} />
+        <Stat label="Rate" value={`${connectRate}%`} />
+        <Stat
+          label="Talk"
+          value={formatDuration(sessionStats?.talkTimeSec ?? stats.talkTimeSec)}
+        />
+        <Stat label="/hr" value={dialsPerHour} />
+        <Stat label="Intr" value={sessionStats?.interested ?? 0} />
+        <Stat label="Booked" value={sessionStats?.booked ?? stats.booked} tone="good" />
+      </div>
+
+      {/* §4.4 requires the rolling abandonment rate to be visible live — it is
+          what enforces the 3% cap, so it gets its own line rather than being
+          squeezed out by the session figures. */}
+      <div className="flex items-center justify-between text-[10px] text-ink-500">
+        <span>
+          Abandoned{' '}
+          <span
+            className={cn(
+              'font-medium tabular-nums',
+              governor?.blocked ? 'text-red-400' : 'text-ink-300',
+            )}
+          >
+            {governor ? `${(governor.rate * 100).toFixed(1)}%` : '—'}
+          </span>{' '}
+          rolling 30 days
+        </span>
+        <span>
+          {governor?.allowedLines ?? linesPerBurst} line
+          {(governor?.allowedLines ?? linesPerBurst) === 1 ? '' : 's'}
+        </span>
       </div>
     </div>
   );

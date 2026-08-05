@@ -97,6 +97,25 @@ export interface SessionView {
 
   held: HeldCaller[];
 
+  /**
+   * Live session figures, counted from call rows rather than from UI events.
+   *
+   * §6.2 is explicit that the UI never writes analytics, and the same applies
+   * to reading them: a counter incremented in the browser drifts the moment a
+   * request fails or a page is reloaded mid-session, and the operator is left
+   * trusting a number that quietly stopped matching reality.
+   */
+  stats: {
+    dials: number;
+    connects: number;
+    ownerConnects: number;
+    ownerRate: number;
+    booked: number;
+    interested: number;
+    voicemails: number;
+    talkTimeSec: number;
+  };
+
   /// Legs that resolved without reaching the operator, most recent first, so
   /// the UI can fade them out showing why (§3.7).
   resolved: {
@@ -125,6 +144,41 @@ export async function sessionView(sessionId: string): Promise<SessionView | null
     take: 40,
   });
 
+  // Counted over the whole session, not the recent window used for the cards.
+  const allCalls = await db.call.findMany({
+    where: { sessionId },
+    select: {
+      status: true,
+      disposition: true,
+      durationSec: true,
+      ownerConnect: true,
+      bridgedAt: true,
+      amdResult: true,
+    },
+  });
+
+  const connects = allCalls.filter((c) => c.bridgedAt !== null).length;
+  const ownerConnects = allCalls.filter((c) => c.ownerConnect).length;
+
+  const stats = {
+    dials: allCalls.length,
+    connects,
+    ownerConnects,
+    // Of the people who picked up, how many were the person worth reaching.
+    // The headline number in §6.3, and the one worth watching live.
+    ownerRate: connects > 0 ? ownerConnects / connects : 0,
+    booked: allCalls.filter((c) => c.disposition === 'booked').length,
+    // Interested is a superset of Booked (§6.3) — a booking is an interested
+    // lead that also picked a time, and counting them apart understates both.
+    interested: allCalls.filter(
+      (c) => c.disposition === 'interested' || c.disposition === 'booked',
+    ).length,
+    voicemails: allCalls.filter((c) => c.disposition === 'voicemail').length,
+    talkTimeSec: allCalls
+      .filter((c) => c.bridgedAt !== null)
+      .reduce((sum, c) => sum + c.durationSec, 0),
+  };
+
   const now = Date.now();
   const active = calls.find(
     (c) => c.id === session.activeCallId && c.endedAt === null && c.bridgedAt !== null,
@@ -137,6 +191,7 @@ export async function sessionView(sessionId: string): Promise<SessionView | null
     operatorLegId: session.operatorLegId,
     linesPerBurst: session.linesPerBurst,
     failureReason: session.failureReason,
+    stats,
 
     active: active
       ? {
