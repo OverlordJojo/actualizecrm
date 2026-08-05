@@ -190,3 +190,100 @@ export function autoDispositionFor(params: {
   if (!params.wasAnswered) return 'no_answer';
   return 'not_interested';
 }
+
+/**
+ * Applies §3.4 when a call ends without the operator choosing an outcome.
+ *
+ * This was written and never wired, which is why leads stayed in the queue
+ * after being called: only an explicit outcome moved anything, so hanging up
+ * and moving on left the lead exactly where it was, to be dialled again next
+ * session.
+ *
+ * Three endings, three different right answers:
+ *
+ *   - **Answered, then hung up with no outcome.** The operator spoke to them
+ *     and moved on. That is a no, so the lead is trashed as Not Interested and
+ *     leaves the board — undoable for ten seconds like every other removal.
+ *
+ *   - **Carrier failure.** `call_rejected`, an unallocated number, a network
+ *     fault. The prospect had no part in this and destroying the lead over it
+ *     would be silent data loss, so it is dispositioned Failed and stays put
+ *     for a retry.
+ *
+ *   - **Nobody picked up.** Also not a no. The lead stays, but goes to the
+ *     bottom of the column so the next session works through people who have
+ *     not been tried yet before coming back round. A dialer that opens on the
+ *     same twelve no-answers every morning is a dialer nobody uses twice.
+ */
+export async function applyAutoOutcome(params: {
+  callId: string;
+  wasAnswered: boolean;
+  hangupCause?: string | null;
+}): Promise<OutcomeResult> {
+  const call = await db.call.findUnique({ where: { id: params.callId } });
+  if (!call) return { applied: false, note: 'no such call' };
+
+  // The operator decided. Nothing to infer.
+  if (call.disposition) return { applied: false, note: 'already dispositioned' };
+
+  const carrierFailure = CARRIER_FAILURE_CAUSES.has(
+    (params.hangupCause ?? '').toLowerCase(),
+  );
+
+  const disposition = autoDispositionFor({
+    wasAnswered: params.wasAnswered,
+    carrierFailure,
+  });
+
+  if (disposition === 'not_interested') {
+    return applyOutcome({ callId: params.callId, disposition });
+  }
+
+  // Failed and no-answer both stay in the pipeline. Record the outcome and,
+  // for a no-answer, move them behind everyone untried.
+  await db.call.update({
+    where: { id: params.callId },
+    data: { disposition },
+  });
+  await db.contact.update({
+    where: { id: call.contactId },
+    data: {
+      lastDisposition: disposition,
+      ...(disposition === 'no_answer'
+        ? { noAnswerStreak: { increment: 1 } }
+        : {}),
+    },
+  });
+
+  if (disposition === 'no_answer' && call.contactId) {
+    const contact = await db.contact.findUnique({
+      where: { id: call.contactId },
+      select: { stageId: true },
+    });
+    if (contact?.stageId) {
+      const last = await db.contact.aggregate({
+        where: { stageId: contact.stageId },
+        _max: { stagePosition: true },
+      });
+      await db.contact.update({
+        where: { id: call.contactId },
+        data: { stagePosition: (last._max.stagePosition ?? 0) + 1 },
+      });
+    }
+  }
+
+  return { applied: true, contactId: call.contactId, note: disposition };
+}
+
+/// Hangup causes that must never cost a lead. Kept here rather than imported
+/// from the app so the engine can decide without reaching across services.
+const CARRIER_FAILURE_CAUSES = new Set([
+  'call_rejected',
+  'unallocated_number',
+  'invalid_number_format',
+  'network_out_of_order',
+  'no_route_destination',
+  'service_unavailable',
+  'recovery_on_timer_expire',
+  'destination_out_of_order',
+]);

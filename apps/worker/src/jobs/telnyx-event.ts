@@ -13,6 +13,7 @@ import {
   screenVoicemailGreeting,
   releaseActive,
   finalizeAttribution,
+  applyAutoOutcome,
   type SessionLegState,
 } from '@actualizecrm/dialer';
 import { relayToApp, relayLiveExtraction } from '../lib/app-relay';
@@ -329,6 +330,15 @@ async function handleSessionEvent(
           },
         });
       }
+      // §3.4 — a call that ended with no outcome still has one. Without this
+      // the lead sat in the queue exactly where it was and got dialled again
+      // next session, which is what "it never leaves the dialer" was.
+      const auto = await applyAutoOutcome({
+        callId,
+        wasAnswered: Boolean(call?.answeredAt),
+        hangupCause: p.hangup_cause ?? null,
+      });
+
       // Owner attribution, from stored facts only (§6.2). Deterministic and
       // deliberately independent of the AI pipeline — these numbers must be
       // identical with DEEPINFRA_API_KEY removed.
@@ -340,7 +350,7 @@ async function handleSessionEvent(
       return {
         handled: true,
         eventType,
-        note: `prospect leg ended — ${attribution.reason}`,
+        note: `prospect leg ended — ${attribution.reason}; auto=${auto.note ?? 'none'}`,
       };
     }
 

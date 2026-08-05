@@ -150,7 +150,26 @@ async function getSharedClient(): Promise<any> {
       );
     }
 
-    const client = new TelnyxRTC({ login_token: json.token });
+    /**
+     * Pin the edge the browser connects to.
+     *
+     * A conference is created in the region its first participant is anchored
+     * in, and one of ours came up in `mn1` — Minneapolis — for an operator on
+     * the west coast. Every word then crosses the continent to be mixed and
+     * crosses back, in both directions, which is exactly the symmetric delay
+     * that gets reported as "they hear me late and I hear them late".
+     *
+     * `auto` picks by network path rather than geography and can choose badly
+     * behind a VPN or an ISP with odd peering. Naming the region removes the
+     * guess. Configurable because the right answer is wherever the operator
+     * actually sits.
+     */
+    const region = process.env.NEXT_PUBLIC_TELNYX_REGION || 'us-west';
+
+    const client = new TelnyxRTC({
+      login_token: json.token,
+      ...(region && region !== 'auto' ? { region } : {}),
+    });
 
     sharedClient = client;
 
