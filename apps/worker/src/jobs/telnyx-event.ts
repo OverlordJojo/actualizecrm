@@ -374,7 +374,32 @@ async function handleSessionEvent(
     // decides whether the operator hears it at all.
     case 'call.transcription': {
       const t = p.transcription_data;
-      if (!t?.transcript || t.is_final === false) {
+      if (!t?.transcript) return { handled: true, eventType, note: 'empty' };
+
+      /**
+       * Interim results are screened; only finals are stored.
+       *
+       * A recorded greeting never stops talking, so waiting for a final segment
+       * means waiting for the whole recording — by which time the operator has
+       * heard it. The giveaway words come first, so the partial is exactly what
+       * this needs.
+       *
+       * They are not appended to the transcript, because interims are re-sent
+       * and revised as the speaker continues and storing them would duplicate
+       * every line.
+       */
+      if (t.is_final === false) {
+        if (t.track === 'inbound') {
+          const kind = await screenVoicemailGreeting({
+            sessionId,
+            callId,
+            callControlId,
+            transcript: t.transcript,
+          });
+          if (kind === 'carrier' || kind === 'human') {
+            return { handled: true, eventType, note: `greeting=${kind} (partial)` };
+          }
+        }
         return { handled: true, eventType, note: 'interim' };
       }
 
@@ -389,6 +414,19 @@ async function handleSessionEvent(
         where: { id: callId },
         select: { transcript: true, disposition: true, contactId: true },
       });
+
+      // Screened on finals too, in case every partial was ambiguous.
+      if (call && t.track === 'inbound') {
+        const kind = await screenVoicemailGreeting({
+          sessionId,
+          callId,
+          callControlId,
+          transcript: call.transcript ?? t.transcript,
+        });
+        if (kind !== 'unknown') {
+          return { handled: true, eventType, note: `greeting=${kind}` };
+        }
+      }
 
       if (call?.disposition !== 'voicemail') {
         // A prospect turn is the trigger for extraction (§5.3). The operator's

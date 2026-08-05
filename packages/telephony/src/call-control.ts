@@ -105,7 +105,22 @@ export async function startTranscription(callControlId: string): Promise<void> {
   await callControl(callControlId, 'transcription_start', {
     transcription_engine: 'B',
     language: 'en',
-    interim_results: false,
+    /**
+     * Partial results, on purpose.
+     *
+     * A final segment arrives when the speaker stops, and a recorded greeting
+     * does not stop — it runs to the end of its script. Waiting for finals to
+     * decide whether this is a machine means deciding after the operator has
+     * already listened to the whole thing, which is exactly backwards: the
+     * words that give it away come first. "The person you're trying to reach"
+     * is unmistakable four words in.
+     *
+     * Interims are used *only* for that decision. They are re-sent and revised
+     * as the speaker continues, so storing them would make the transcript pane
+     * stutter and duplicate lines — the stored transcript still comes from
+     * finals alone.
+     */
+    interim_results: true,
   });
 }
 

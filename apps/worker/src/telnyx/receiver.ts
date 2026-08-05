@@ -7,7 +7,7 @@ import {
 import { enqueue } from '../queue';
 import { claimEvent, releaseEvent } from './dedupe';
 import { resolveProbe, PROBE_KIND } from './probe';
-import { routeAmdVerdict } from '@actualizecrm/dialer';
+import { routeAmdVerdict, screenVoicemailGreeting } from '@actualizecrm/dialer';
 
 /**
  * The Telnyx webhook endpoint (§1.2).
@@ -195,6 +195,28 @@ export async function handleTelnyxWebhook(
         callControlId: String(envelope.data?.payload?.call_control_id ?? ''),
         verdict: (envelope.data?.payload?.result as string) ?? null,
       }).catch((err) => console.error('[telnyx] fast-path AMD failed', err));
+    }
+  }
+
+  /**
+   * Screen a greeting the moment its words arrive, not a queue hop later.
+   *
+   * A recording gives itself away in its first few words and the operator is
+   * listening to it the whole time it takes to act. Enqueue, poll, worker is
+   * several hundred milliseconds of robot.
+   */
+  if (eventType === 'call.transcription' && state?.k === 'session' && state.role === 'prospect') {
+    const legState = state as unknown as { sessionId: string; callId?: string };
+    const t = envelope.data?.payload?.transcription_data as
+      | { transcript?: string; track?: string }
+      | undefined;
+    if (legState.callId && t?.transcript && t.track === 'inbound') {
+      void screenVoicemailGreeting({
+        sessionId: legState.sessionId,
+        callId: legState.callId,
+        callControlId: String(envelope.data?.payload?.call_control_id ?? ''),
+        transcript: t.transcript,
+      }).catch((err) => console.error('[telnyx] fast-path greeting screen failed', err));
     }
   }
 

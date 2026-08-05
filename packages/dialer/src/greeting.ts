@@ -52,6 +52,10 @@ const CARRIER_PHRASES = [
 /// First-person phrasing. A person recording their own greeting, or a business
 /// recording one for itself.
 const HUMAN_MARKERS = [
+  // "Hey, it's Sarah" — the commonest personal greeting there is, and one no
+  // network recording has ever opened with.
+  "it's ",
+  'this is ',
   "you've reached",
   'you have reached',
   "i'm not",
@@ -117,9 +121,47 @@ const DECISIVE_CARRIER = [
   'has not been set up',
 ];
 
+/**
+ * Openings that give a recording away before it finishes its first sentence.
+ *
+ * Matched as prefixes against a partial transcript, because that is the whole
+ * point: a greeting is recognisable from its first few words and there is no
+ * reason to sit through the rest. "The person you're trying to reach" is
+ * decided four words in.
+ */
+const CARRIER_OPENINGS = [
+  'the person you',
+  'the party you',
+  'the number you',
+  'the subscriber you',
+  'the wireless customer',
+  'the cellular customer',
+  'the google subscriber',
+  'your call has been forwarded',
+  'you have reached the voice',
+  'welcome to the',
+  'thank you for calling. your call',
+  'please leave your message for',
+  'at the tone',
+  'record your message',
+  'press one',
+  'press 1',
+  'for english',
+  'para espanol',
+  'para español',
+];
+
 export function classifyGreeting(transcript: string): GreetingKind {
   const text = transcript.toLowerCase().replace(/\s+/g, ' ').trim();
-  if (text.length < 12) return 'unknown';
+
+  // Decided as early as possible. Eight characters is enough for "the person",
+  // and holding out for a full sentence means holding the operator on the line
+  // through the whole recording.
+  if (CARRIER_OPENINGS.some((o) => text.startsWith(o) || text.includes(o))) {
+    return 'carrier';
+  }
+
+  if (text.length < 8) return 'unknown';
 
   // Reading the number back, one digit at a time. Nobody does this about their
   // own phone, so it settles the question by itself.

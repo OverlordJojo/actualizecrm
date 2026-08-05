@@ -584,10 +584,24 @@ export async function screenVoicemailGreeting(params: {
   callControlId: string;
   transcript: string;
 }): Promise<GreetingKind> {
-  const { callId, callControlId, transcript } = params;
+  const { sessionId, callId, callControlId, transcript } = params;
 
   const call = await db.call.findUnique({ where: { id: callId } });
-  if (!call || call.endedAt || call.disposition !== 'voicemail') return 'unknown';
+  if (!call || call.endedAt) return 'unknown';
+
+  /**
+   * Screens **every** prospect leg, not only ones detection already called
+   * machines.
+   *
+   * That guard was the hole. A recording AMD returned `not_sure` for was
+   * bridged as a person and then never screened, because screening was gated on
+   * a disposition only a `machine` verdict sets. The operator heard the whole
+   * greeting and the words that gave it away were sitting in the transcript
+   * unread.
+   *
+   * Detection judges tone in the first second; this judges words. They fail at
+   * different things, so both run, and a machine has to get past both.
+   */
 
   const contact = await db.contact.findUnique({
     where: { id: call.contactId },
@@ -625,8 +639,16 @@ export async function screenVoicemailGreeting(params: {
   await hangup(callControlId).catch(() => {});
   await db.call.update({
     where: { id: callId },
-    data: { status: 'completed', endedAt: new Date() },
+    data: {
+      status: 'completed',
+      endedAt: new Date(),
+      // Set here as well: a leg reaching this point may never have been called
+      // a machine by detection at all.
+      disposition: kind === 'carrier' ? 'voicemail' : call.disposition,
+    },
   });
+  // Frees the operator if this recording had been bridged to them.
+  await releaseActive(sessionId, callId);
 
   if (kind === 'carrier') {
     await db.activity.create({
