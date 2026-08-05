@@ -14,6 +14,10 @@ import {
   holdParticipants,
   unholdParticipants,
   speakToConference,
+  bridgeCalls,
+  parkWithHoldAudio,
+  speak,
+  stopPlayback,
   isHumanVerdict,
   isMachineVerdict,
   isFaxVerdict,
@@ -181,6 +185,33 @@ export async function startSession(
  * was being said in the room.
  */
 export async function onOperatorLegAnswered(
+  sessionId: string,
+  callControlId: string,
+): Promise<void> {
+  const session = await db.dialSession.findUnique({ where: { id: sessionId } });
+  if (!session || session.status === 'live') return;
+
+  /**
+   * No conference. The operator's leg simply stays up.
+   *
+   * The anchor is still the point — one leg that outlives every prospect, so
+   * hang-up can never drop the operator and the session survives navigation.
+   * What changed is that prospects are *bridged* to it rather than mixed with
+   * it, because a mixer buffers to align packets and that cost close to a
+   * second each way with only two people in the room.
+   *
+   * Parked callers do not need a room either: they wait on their own leg with
+   * hold audio. Nobody on hold has ever needed to hear anybody.
+   */
+  await db.dialSession.update({
+    where: { id: sessionId },
+    data: { operatorLegId: callControlId, status: 'live' },
+  });
+}
+
+/// Retained for the migration window: sessions started before the switch to
+/// direct bridging still have a conference recorded against them.
+async function legacyConference(
   sessionId: string,
   callControlId: string,
 ): Promise<void> {
@@ -435,8 +466,10 @@ export async function routeAnswer(params: {
   const call = await db.call.findUnique({ where: { id: callId } });
   if (!call || call.endedAt || call.bridgedAt || call.heldAt) return 'ignored';
 
-  const session = await ensureConference(sessionId);
-  if (!session?.conferenceId) {
+  const session = await db.dialSession.findUnique({ where: { id: sessionId } });
+  if (!session?.operatorLegId) {
+    // No operator leg means no session. Releasing the prospect is kinder than
+    // holding them in silence while we work out why.
     await hangup(callControlId).catch(() => {});
     return 'ignored';
   }
@@ -485,27 +518,28 @@ export async function routeAnswer(params: {
   }
 
   if (won.count === 1) {
-    await joinConference({
-      conferenceId: session.conferenceId,
+    /**
+     * Straight to the operator, with no conference in the middle.
+     *
+     * The conference was costing close to a second each way. A mixer buffers
+     * every participant to align packets before combining them — correct for
+     * three people, and pure latency for two. A bridge just joins the two media
+     * paths.
+     */
+    if (!session.operatorLegId) {
+      await hangup(callControlId).catch(() => {});
+      await db.dialSession.updateMany({
+        where: { id: sessionId, activeCallId: callId },
+        data: { activeCallId: null },
+      });
+      return 'ignored';
+    }
+
+    await bridgeCalls({
       callControlId,
-      startConferenceOnEnter: true,
+      otherCallControlId: session.operatorLegId,
       clientState: legState({ k: 'session', sessionId, role: 'prospect', callId }),
     });
-
-    if (session.operatorLegId) {
-      for (let i = 0; i < 3; i++) {
-        try {
-          await unmuteParticipants({
-            conferenceId: session.conferenceId,
-            callControlIds: [session.operatorLegId],
-          });
-          break;
-        } catch (err) {
-          if (i === 2) console.error('[dialer] could not unmute the operator', err);
-          else await new Promise((r) => setTimeout(r, 250));
-        }
-      }
-    }
 
     await db.call.update({
       where: { id: callId },
@@ -518,17 +552,12 @@ export async function routeAnswer(params: {
     return 'bridged';
   }
 
-  // Somebody got there first: park them with the identification prompt.
-  await joinConference({
-    conferenceId: session.conferenceId,
+  // Somebody got there first. They wait on their own leg — no room to put them
+  // in, and nobody on hold needs to hear anybody.
+  await speak(callControlId, await holdPrompt()).catch(() => {});
+  await parkWithHoldAudio({
     callControlId,
-    hold: true,
-    clientState: legState({ k: 'session', sessionId, role: 'prospect', callId }),
-  });
-  await speakToConference({
-    conferenceId: session.conferenceId,
-    text: await holdPrompt(),
-    callControlIds: [callControlId],
+    audioUrl: (await getSetting('dialer.holdMusicUrl')) || undefined,
   }).catch(() => {});
   await db.call.update({
     where: { id: callId },
@@ -769,15 +798,8 @@ export async function routeAmdVerdict(params: {
    * own for a few seconds, purely to transcribe. `screenVoicemailGreeting` then
    * decides what it was and files the lead accordingly.
    */
-  if (call.bridgedAt) {
-    const s2 = await db.dialSession.findUnique({ where: { id: sessionId } });
-    if (s2?.conferenceId && call.callControlId) {
-      await leaveConference({
-        conferenceId: s2.conferenceId,
-        callControlId: call.callControlId,
-      }).catch(() => {});
-    }
-  }
+  // A bridged machine is dropped by hanging its leg up; the bridge ends with
+  // it and the operator is free. There is no room to leave.
   await releaseActive(sessionId, callId);
 
   await db.call.update({
@@ -842,13 +864,9 @@ export async function releaseActive(sessionId: string, callId: string): Promise<
   });
   if (cleared.count === 0) return;
 
-  const session = await db.dialSession.findUnique({ where: { id: sessionId } });
-  if (session?.conferenceId && session.operatorLegId) {
-    await muteParticipants({
-      conferenceId: session.conferenceId,
-      callControlIds: [session.operatorLegId],
-    }).catch(() => {});
-  }
+  // Nothing to mute. The operator's leg is not in a room between calls — the
+  // bridge ended with the prospect's leg, and their microphone reaches nobody
+  // until the next one is bridged in.
 }
 
 /**
@@ -861,7 +879,7 @@ export async function releaseActive(sessionId: string, callId: string): Promise<
  */
 export async function bridgeOldestHeld(sessionId: string): Promise<string | null> {
   const session = await db.dialSession.findUnique({ where: { id: sessionId } });
-  if (!session?.conferenceId) return null;
+  if (!session?.operatorLegId) return null;
 
   const next = await db.call.findFirst({
     where: { sessionId, status: 'held', endedAt: null },
@@ -876,9 +894,8 @@ export async function bridgeOldestHeld(sessionId: string): Promise<string | null
   if (won.count === 0) return null;
 
   // Re-read after claiming. The hold sweep runs on its own timer and may have
-  // abandoned this caller in the moment between the query above and the claim —
-  // which happened, and produced a call marked bridged four tenths of a second
-  // *after* it was hung up. The operator then sat connected to nothing.
+  // retired this caller in the moment between the query and the claim, which
+  // once produced a call marked bridged after it had been hung up.
   const stillThere = await db.call.findUnique({ where: { id: next.id } });
   if (!stillThere || stillThere.endedAt) {
     await db.dialSession.updateMany({
@@ -888,32 +905,23 @@ export async function bridgeOldestHeld(sessionId: string): Promise<string | null
     return null;
   }
 
-  await unholdParticipants({
-    conferenceId: session.conferenceId,
-    callControlIds: [next.callControlId],
-  }).catch(() => {});
+  // Stop the hold music first, or it plays over the operator's greeting.
+  await stopPlayback(next.callControlId).catch(() => {});
 
-  // A held caller being promoted may be the first live participant of all, if
-  // every earlier leg resolved to a machine. Starting the conference is
-  // idempotent, so doing it here costs nothing and closes that gap.
-  await joinConference({
-    conferenceId: session.conferenceId,
+  await bridgeCalls({
     callControlId: next.callControlId,
-    startConferenceOnEnter: true,
-  }).catch(() => {
-    // Already a participant — expected, since they were joined on hold.
+    otherCallControlId: session.operatorLegId,
+    clientState: legState({
+      k: 'session',
+      sessionId,
+      role: 'prospect',
+      callId: next.id,
+    }),
   });
-
-  if (session.operatorLegId) {
-    await unmuteParticipants({
-      conferenceId: session.conferenceId,
-      callControlIds: [session.operatorLegId],
-    }).catch(() => {});
-  }
 
   const heldSeconds = next.heldAt
     ? Math.round((Date.now() - next.heldAt.getTime()) / 1000)
-    : 0;
+    : next.heldSeconds;
 
   await db.call.update({
     where: { id: next.id },
@@ -987,20 +995,16 @@ export async function sweepExpiredHolds(): Promise<number> {
       ? await db.dialSession.findUnique({ where: { id: call.sessionId } })
       : null;
 
-    if (call.callControlId && session?.conferenceId) {
-      await speakToConference({
-        conferenceId: session.conferenceId,
-        text: "I'm sorry, no one is available to take your call right now. We'll try you again shortly. Goodbye.",
-        callControlIds: [call.callControlId],
-      }).catch(() => {});
+    if (call.callControlId) {
+      await stopPlayback(call.callControlId).catch(() => {});
+      await speak(
+        call.callControlId,
+        "I'm sorry, no one is available to take your call right now. We'll try you again shortly. Goodbye.",
+      ).catch(() => {});
       // Let the apology land before the leg goes away.
       await new Promise((r) => setTimeout(r, 3500));
-      await leaveConference({
-        conferenceId: session.conferenceId,
-        callControlId: call.callControlId,
-      }).catch(() => {});
+      await hangup(call.callControlId).catch(() => {});
     }
-    if (call.callControlId) await hangup(call.callControlId).catch(() => {});
 
     const heldSeconds = call.heldAt
       ? Math.round((Date.now() - call.heldAt.getTime()) / 1000)
@@ -1115,19 +1119,26 @@ export async function switchToCall(params: {
   const { sessionId, callId } = params;
 
   const session = await db.dialSession.findUnique({ where: { id: sessionId } });
-  if (!session?.conferenceId) return false;
+  if (!session?.operatorLegId) return false;
   if (session.activeCallId === callId) return true;
 
   const target = await db.call.findUnique({ where: { id: callId } });
   if (!target?.callControlId || target.endedAt) return false;
 
-  // Park whoever is live now.
+  /**
+   * Park whoever is live, then bridge the one being switched to.
+   *
+   * Bridging the operator to a new leg is what moves them; the previous
+   * prospect is left on their own leg with hold audio rather than dropped.
+   * Somebody the operator stepped away from is still a prospect who answered,
+   * and hanging up on them to talk to somebody else is worse than the hold.
+   */
   if (session.activeCallId) {
     const current = await db.call.findUnique({ where: { id: session.activeCallId } });
     if (current?.callControlId && !current.endedAt) {
-      await holdParticipants({
-        conferenceId: session.conferenceId,
-        callControlIds: [current.callControlId],
+      await parkWithHoldAudio({
+        callControlId: current.callControlId,
+        audioUrl: (await getSetting('dialer.holdMusicUrl')) || undefined,
       }).catch(() => {});
       await db.call.update({
         where: { id: current.id },
@@ -1141,17 +1152,12 @@ export async function switchToCall(params: {
     data: { activeCallId: callId },
   });
 
-  await unholdParticipants({
-    conferenceId: session.conferenceId,
-    callControlIds: [target.callControlId],
-  }).catch(() => {});
-
-  if (session.operatorLegId) {
-    await unmuteParticipants({
-      conferenceId: session.conferenceId,
-      callControlIds: [session.operatorLegId],
-    }).catch(() => {});
-  }
+  await stopPlayback(target.callControlId).catch(() => {});
+  await bridgeCalls({
+    callControlId: target.callControlId,
+    otherCallControlId: session.operatorLegId,
+    clientState: legState({ k: 'session', sessionId, role: 'prospect', callId }),
+  });
 
   const heldSeconds = target.heldAt
     ? Math.round((Date.now() - target.heldAt.getTime()) / 1000)

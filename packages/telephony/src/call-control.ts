@@ -371,3 +371,54 @@ export function isFaxVerdict(verdict: string | null | undefined): boolean {
   const v = (verdict ?? '').toLowerCase();
   return v.includes('fax') || v.includes('modem');
 }
+
+/**
+ * Connects two legs directly, with no conference in between.
+ *
+ * A conference mixes: it buffers each participant to align packets before
+ * combining them, which is correct for three people talking and costs close to
+ * a second of round-trip when only two are. That delay is symmetric — the
+ * operator hears the prospect late *and* is heard late — which is exactly how a
+ * mixer presents and nothing like how distance presents.
+ *
+ * A bridge just connects the two media paths. No alignment, no mixing, no
+ * buffer beyond the jitter one each leg already has.
+ *
+ * The cost is that a bridge is strictly two-party, so a parked caller cannot
+ * sit inside it. They wait on their own leg with hold audio instead, which is
+ * what §2.2's hold queue needed anyway — nobody on hold needs to hear anybody.
+ */
+export async function bridgeCalls(params: {
+  callControlId: string;
+  otherCallControlId: string;
+  clientState?: string;
+}): Promise<void> {
+  await callControl(params.callControlId, 'bridge', {
+    call_control_id: params.otherCallControlId,
+    // Neither side hears a tone when they are joined. A beep mid-greeting is
+    // the prospect's first impression of the call.
+    play_ringtone: false,
+    ...(params.clientState ? { client_state: params.clientState } : {}),
+  });
+}
+
+/**
+ * Parks a leg on its own, playing hold audio in a loop.
+ *
+ * Used for a queued owner while the operator is on another call. Silence makes
+ * people hang up within seconds, so something has to play — but it is played
+ * *to that leg alone*, not into a shared room, which is why no conference is
+ * needed to hold somebody.
+ */
+export async function parkWithHoldAudio(params: {
+  callControlId: string;
+  audioUrl?: string;
+  clientState?: string;
+}): Promise<void> {
+  if (!params.audioUrl) return;
+  await callControl(params.callControlId, 'playback_start', {
+    audio_url: params.audioUrl,
+    loop: 'infinity',
+    ...(params.clientState ? { client_state: params.clientState } : {}),
+  });
+}

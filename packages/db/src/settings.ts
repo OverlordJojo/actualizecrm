@@ -24,6 +24,12 @@ export const SETTING_DEFAULTS = {
   /// second is a line held open that could be ringing somebody else. Too short
   /// and you miss people who were walking to the phone.
   'dialer.maxRingSeconds': '30',
+  /// Publicly reachable audio played to a queued owner while they wait.
+  ///
+  /// Silence makes people hang up within seconds. Left empty they hear the
+  /// identification line and then nothing, which is worse than music but still
+  /// better than a mixer in the audio path for everybody else.
+  'dialer.holdMusicUrl': '',
 
   // Analytics
   /// Seconds a human must stay on the line to count as the owner rather than
