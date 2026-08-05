@@ -426,10 +426,41 @@ export async function routeAnswer(params: {
 
   // Exactly one leg can move activeCallId off null, so two answering in the
   // same instant cannot both believe they won.
-  const won = await db.dialSession.updateMany({
+  let won = await db.dialSession.updateMany({
     where: { id: sessionId, activeCallId: null },
     data: { activeCallId: callId },
   });
+
+  /**
+   * A person always outranks a recording.
+   *
+   * The operator can be sitting on an answering machine's greeting, which is
+   * useful but not urgent — it can be listened to later, or not at all. A human
+   * who has just said hello cannot wait, and queueing them behind a machine is
+   * how one ended up on hold for thirty-two seconds and was then dropped as
+   * abandoned. Recordings yield.
+   */
+  if (won.count === 0) {
+    const holder = session.activeCallId
+      ? await db.call.findUnique({ where: { id: session.activeCallId } })
+      : null;
+
+    if (holder && holder.disposition === 'voicemail' && !holder.endedAt) {
+      if (holder.callControlId) await hangup(holder.callControlId).catch(() => {});
+      await db.call.update({
+        where: { id: holder.id },
+        data: { status: 'completed', endedAt: new Date() },
+      });
+      await db.dialSession.updateMany({
+        where: { id: sessionId, activeCallId: holder.id },
+        data: { activeCallId: null },
+      });
+      won = await db.dialSession.updateMany({
+        where: { id: sessionId, activeCallId: null },
+        data: { activeCallId: callId },
+      });
+    }
+  }
 
   if (won.count === 1) {
     await joinConference({
@@ -688,6 +719,19 @@ export async function bridgeOldestHeld(sessionId: string): Promise<string | null
   });
   if (won.count === 0) return null;
 
+  // Re-read after claiming. The hold sweep runs on its own timer and may have
+  // abandoned this caller in the moment between the query above and the claim —
+  // which happened, and produced a call marked bridged four tenths of a second
+  // *after* it was hung up. The operator then sat connected to nothing.
+  const stillThere = await db.call.findUnique({ where: { id: next.id } });
+  if (!stillThere || stillThere.endedAt) {
+    await db.dialSession.updateMany({
+      where: { id: sessionId, activeCallId: next.id },
+      data: { activeCallId: null },
+    });
+    return null;
+  }
+
   await unholdParticipants({
     conferenceId: session.conferenceId,
     callControlIds: [next.callControlId],
@@ -740,6 +784,18 @@ export async function sweepExpiredHolds(): Promise<number> {
   });
 
   for (const call of expired) {
+    // Never abandon somebody the operator is free to take right now. The sweep
+    // exists for callers nobody is coming back to, not for the one about to be
+    // bridged — and losing that race drops a live prospect a second before they
+    // would have been connected.
+    if (call.sessionId) {
+      const owner = await db.dialSession.findUnique({
+        where: { id: call.sessionId },
+        select: { activeCallId: true, status: true },
+      });
+      if (owner && owner.activeCallId === null && owner.status === 'live') continue;
+    }
+
     const session = call.sessionId
       ? await db.dialSession.findUnique({ where: { id: call.sessionId } })
       : null;

@@ -339,8 +339,19 @@ export function useDialSession({
     if (trashToast && Date.now() < trashToast.expiresAt) return;
     if (advancingRef.current || advanceTimer.current) return;
     advancingRef.current = true;
+
+    // Somebody on hold does not wait out the gap. The gap is breathing room
+    // before dialling a stranger; a queued owner has already been listening to
+    // hold music and is a few seconds from giving up. Draining is urgent in a
+    // way that dialling is not.
+    if ((view.held?.length ?? 0) > 0) {
+      clearAdvance();
+      void advance();
+      return;
+    }
+
     startGap();
-  }, [view, startGap, clearAdvance, trashToast]);
+  }, [view, startGap, clearAdvance, trashToast, advance]);
 
   // Expire the undo window, which also releases the advance held above.
   useEffect(() => {
