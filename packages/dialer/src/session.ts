@@ -383,6 +383,133 @@ export async function openBurst(
 export type AmdRouting = 'bridged' | 'held' | 'voicemail' | 'automated' | 'ignored';
 
 /**
+ * A prospect answered. Connect them **now** (§2.2, revised).
+ *
+ * The spec holds every leg unbridged until AMD has decided. That is correct on
+ * paper and wrong in the mouth: premium AMD takes several seconds, and those
+ * seconds are spent by a person who has just said "hello" into total silence.
+ * They conclude it is a robocall and hang up, and the operator never learns the
+ * call existed. Dead air is the most expensive thing a dialer can produce.
+ *
+ * So the order is inverted. The first answer bridges immediately, and the AMD
+ * verdict — which still arrives — is used to *remove* a machine once it is
+ * known to be one. The operator may hear a second or two of an answering
+ * machine; they will not lose the person who picked up.
+ */
+export async function routeAnswer(params: {
+  sessionId: string;
+  callId: string;
+  callControlId: string;
+}): Promise<AmdRouting> {
+  const { sessionId, callId, callControlId } = params;
+
+  const call = await db.call.findUnique({ where: { id: callId } });
+  if (!call || call.endedAt || call.bridgedAt || call.heldAt) return 'ignored';
+
+  const session = await ensureConference(sessionId);
+  if (!session?.conferenceId) {
+    await hangup(callControlId).catch(() => {});
+    return 'ignored';
+  }
+
+  await db.contact.update({
+    where: { id: call.contactId },
+    data: { everConnected: true, connectCount: { increment: 1 } },
+  });
+
+  // Exactly one leg can move activeCallId off null, so two answering in the
+  // same instant cannot both believe they won.
+  const won = await db.dialSession.updateMany({
+    where: { id: sessionId, activeCallId: null },
+    data: { activeCallId: callId },
+  });
+
+  if (won.count === 1) {
+    await joinConference({
+      conferenceId: session.conferenceId,
+      callControlId,
+      startConferenceOnEnter: true,
+      clientState: legState({ k: 'session', sessionId, role: 'prospect', callId }),
+    });
+
+    if (session.operatorLegId) {
+      for (let i = 0; i < 3; i++) {
+        try {
+          await unmuteParticipants({
+            conferenceId: session.conferenceId,
+            callControlIds: [session.operatorLegId],
+          });
+          break;
+        } catch (err) {
+          if (i === 2) console.error('[dialer] could not unmute the operator', err);
+          else await new Promise((r) => setTimeout(r, 250));
+        }
+      }
+    }
+
+    await db.call.update({
+      where: { id: callId },
+      data: { status: 'answered', bridgedAt: new Date() },
+    });
+    await db.dialSession.update({
+      where: { id: sessionId },
+      data: { connects: { increment: 1 } },
+    });
+    return 'bridged';
+  }
+
+  // Somebody got there first: park them with the identification prompt.
+  await joinConference({
+    conferenceId: session.conferenceId,
+    callControlId,
+    hold: true,
+    clientState: legState({ k: 'session', sessionId, role: 'prospect', callId }),
+  });
+  await speakToConference({
+    conferenceId: session.conferenceId,
+    text: await holdPrompt(),
+    callControlIds: [callControlId],
+  }).catch(() => {});
+  await db.call.update({
+    where: { id: callId },
+    data: { status: 'held', heldAt: new Date() },
+  });
+  return 'held';
+}
+
+/**
+ * Returns the session with a live conference, rebuilding one if it has ended.
+ *
+ * A Telnyx conference ends when its last active participant leaves, and a
+ * session idling between bursts is exactly when that happens.
+ */
+async function ensureConference(sessionId: string) {
+  let session = await db.dialSession.findUnique({ where: { id: sessionId } });
+  if (!session?.conferenceId || !session.operatorLegId) return session;
+
+  const live = await findConferenceByName(
+    session.conferenceName ?? `actualizecrm-${sessionId}`,
+  );
+  if (live) return session;
+
+  console.warn('[dialer] conference had ended — rebuilding around the operator');
+  try {
+    const rebuilt = await createConference({
+      callControlId: session.operatorLegId,
+      name: `actualizecrm-${sessionId}-${Date.now()}`,
+    });
+    await db.dialSession.update({
+      where: { id: sessionId },
+      data: { conferenceId: rebuilt.id, conferenceName: rebuilt.name },
+    });
+    session = await db.dialSession.findUnique({ where: { id: sessionId } });
+  } catch (err) {
+    console.error('[dialer] could not rebuild the conference', err);
+  }
+  return session;
+}
+
+/**
  * Acts on an AMD verdict for one prospect leg (§2.2 step 6).
  *
  * `not_sure` is treated as non-human deliberately. Bridging the operator to
@@ -403,169 +530,49 @@ export async function routeAmdVerdict(params: {
 
   await db.call.update({ where: { id: callId }, data: { amdResult: verdict } });
 
-  // Connect unless AMD is *sure* it is a machine.
-  //
-  // §2.2 says treat `not_sure` as non-human, on the reasoning that bridging the
-  // operator to a possible IVR wastes the resource a burst protects. In
-  // practice that reasoning inverts: premium AMD tuned for speed returns
-  // `not_sure` constantly — the same number came back human_residence on one
-  // call and not_sure on the next — so the strict reading hangs up on real
-  // prospects all day. The cost of being wrong is asymmetric. A few seconds of
-  // an operator's time against a lead lost permanently and never called again.
-  //
-  // Machines are still never connected, which is the part that actually
-  // matters.
-  if (isMachineVerdict(verdict) || isFaxVerdict(verdict)) {
-    const machine = isMachineVerdict(verdict);
-    await hangup(callControlId).catch(() => {});
-    await db.call.update({
-      where: { id: callId },
-      data: {
-        disposition: machine ? 'voicemail' : 'automated_system',
-        status: 'completed',
-        endedAt: new Date(),
-      },
-    });
-    await db.contact.update({
-      where: { id: call.contactId },
-      data: {
-        lastDisposition: machine ? 'voicemail' : 'automated_system',
-        noAnswerStreak: 0,
-      },
-    });
-    await db.activity.create({
-      data: {
-        contactId: call.contactId,
-        type: 'disposition',
-        direction: 'outbound',
-        summary: machine
-          ? 'Reached a machine — hung up without notifying the operator'
-          : 'Reached an automated system — hung up without notifying the operator',
-        callId,
-        meta: { amdResult: verdict, notifiedOperator: false },
-      },
-    });
-    return machine ? 'voicemail' : 'automated';
+  // A person, or something AMD could not name. Either way they stay: the leg
+  // was already bridged on answer, and `not_sure` is far too common to hang up
+  // on — the same number has come back human_residence on one call and not_sure
+  // on the next.
+  if (!isMachineVerdict(verdict) && !isFaxVerdict(verdict)) {
+    return call.bridgedAt ? 'bridged' : call.heldAt ? 'held' : 'ignored';
   }
 
-  // A human. Everything below is the queued-owner rule.
-  let session = await db.dialSession.findUnique({ where: { id: sessionId } });
-
-  // The room can die under us — a Telnyx conference ends when its last active
-  // participant leaves, and a session that has been idle between bursts is
-  // exactly when that happens. Rebuild rather than drop the person who just
-  // said hello.
-  if (session?.conferenceId && session.operatorLegId) {
-    const live = await findConferenceByName(
-      session.conferenceName ?? `actualizecrm-${sessionId}`,
-    );
-    if (!live) {
-      console.warn('[dialer] conference had ended — rebuilding around the operator');
-      try {
-        const rebuilt = await createConference({
-          callControlId: session.operatorLegId,
-          name: `actualizecrm-${sessionId}-${Date.now()}`,
-        });
-        await db.dialSession.update({
-          where: { id: sessionId },
-          data: { conferenceId: rebuilt.id, conferenceName: rebuilt.name },
-        });
-        session = await db.dialSession.findUnique({ where: { id: sessionId } });
-      } catch (err) {
-        console.error('[dialer] could not rebuild the conference', err);
-      }
-    }
-  }
-
-  if (!session?.conferenceId) {
-    // No room to put them in. Releasing is kinder than holding someone in
-    // silence while we work out why.
-    await hangup(callControlId).catch(() => {});
-    return 'ignored';
-  }
-
-  // A human answered, which is what owner-verified means here regardless of
-  // whether the operator ever gets to speak to them.
-  await db.contact.update({
-    where: { id: call.contactId },
-    data: { everConnected: true, connectCount: { increment: 1 } },
-  });
-
-  // The race lock. Exactly one leg can move activeCallId off null, so two legs
-  // answering in the same instant cannot both believe they won.
-  const won = await db.dialSession.updateMany({
-    where: { id: sessionId, activeCallId: null },
-    data: { activeCallId: callId },
-  });
-
-  if (won.count === 1) {
-    await joinConference({
-      conferenceId: session.conferenceId,
-      callControlId,
-      // **Starts the conference.** Created with start_conference_on_create
-      // false — otherwise the operator sits in hold music for the whole session
-      // — so something has to start it, and the first prospect to bridge is the
-      // moment audio is first needed. Without this every participant waits in
-      // silence: the call reads as connected and neither side can hear the
-      // other, which is exactly how it presented.
-      startConferenceOnEnter: true,
-      clientState: legState({ k: 'session', sessionId, role: 'prospect', callId }),
-    });
-
-    // Unmute the operator only once a prospect is actually in the room.
-    //
-    // Retried rather than best-effort. A swallowed failure here leaves the
-    // operator talking into a muted line while the prospect hears nothing —
-    // indistinguishable from a broken call, and they will hang up.
-    if (session.operatorLegId) {
-      for (let i = 0; i < 3; i++) {
-        try {
-          await unmuteParticipants({
-            conferenceId: session.conferenceId,
-            callControlIds: [session.operatorLegId],
-          });
-          break;
-        } catch (err) {
-          if (i === 2) console.error('[dialer] could not unmute the operator', err);
-          else await new Promise((r) => setTimeout(r, 300));
-        }
-      }
-    }
-
-    await db.call.update({
-      where: { id: callId },
-      data: { status: 'answered', answeredAt: new Date(), bridgedAt: new Date() },
-    });
-    await db.dialSession.update({
-      where: { id: sessionId },
-      data: { connects: { increment: 1 } },
-    });
-    return 'bridged';
-  }
-
-  // Somebody else got there first: hold them, prompt them, and queue them.
-  // Deliberately does not start the conference: a queued owner is parked, not
-  // talking, and starting it from a held leg would open an audio path to
-  // somebody the operator has not been connected to yet.
-  await joinConference({
-    conferenceId: session.conferenceId,
-    callControlId,
-    hold: true,
-    clientState: legState({ k: 'session', sessionId, role: 'prospect', callId }),
-  });
-
-  await speakToConference({
-    conferenceId: session.conferenceId,
-    text: await holdPrompt(),
-    callControlIds: [callControlId],
-  }).catch(() => {});
-
+  // A machine, now known. Remove it — the operator has heard a second or two of
+  // a greeting, which is the price of never making a human wait in silence.
+  await hangup(callControlId).catch(() => {});
   await db.call.update({
     where: { id: callId },
-    data: { status: 'held', answeredAt: new Date(), heldAt: new Date() },
+    data: {
+      disposition: isMachineVerdict(verdict) ? 'voicemail' : 'automated_system',
+      status: 'completed',
+      endedAt: new Date(),
+    },
+  });
+  await db.contact.update({
+    where: { id: call.contactId },
+    data: {
+      lastDisposition: isMachineVerdict(verdict) ? 'voicemail' : 'automated_system',
+      noAnswerStreak: 0,
+    },
+  });
+  await db.activity.create({
+    data: {
+      contactId: call.contactId,
+      type: 'disposition',
+      direction: 'outbound',
+      summary: isMachineVerdict(verdict)
+        ? 'Reached a machine — dropped once detection confirmed it'
+        : 'Reached a fax or modem — dropped once detection confirmed it',
+      callId,
+      meta: { amdResult: verdict, bridgedFirst: call.bridgedAt !== null },
+    },
   });
 
-  return 'held';
+  // If it was the one the operator was on, free the slot so the loop advances.
+  await releaseActive(sessionId, callId);
+
+  return isMachineVerdict(verdict) ? 'voicemail' : 'automated';
 }
 
 // ---------------------------------------------------------------------------

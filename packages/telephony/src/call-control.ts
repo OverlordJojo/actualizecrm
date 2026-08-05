@@ -204,10 +204,9 @@ export function amdParams() {
   return {
     answering_machine_detection: 'premium' as const,
     answering_machine_detection_config: {
-      // Longer than the original 5000. Speed was being bought with accuracy,
-      // and an undecided verdict is worth less than a slightly later one: the
-      // same number came back human_residence on one call and not_sure on the
-      // next purely because the detector ran out of time.
+      // AMD no longer gates the connection — the leg is bridged on answer and
+      // this only removes machines afterwards — so accuracy is free. Nobody
+      // waits on this number any more.
       total_analysis_time_millis: 8000,
       after_greeting_silence_millis: 1000,
       between_words_silence_millis: 75,

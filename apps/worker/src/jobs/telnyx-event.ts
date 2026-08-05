@@ -9,6 +9,7 @@ import {
   sessionLegState,
   onOperatorLegAnswered,
   routeAmdVerdict,
+  routeAnswer,
   releaseActive,
   finalizeAttribution,
   type SessionLegState,
@@ -281,14 +282,17 @@ async function handleSessionEvent(
   if (!callId) return { handled: false, eventType, note: 'prospect leg with no call id' };
 
   switch (eventType) {
-    // Answer alone decides nothing. AMD has not spoken yet, and bridging on
-    // answer is what puts a machine in the operator's ear.
-    case 'call.answered':
+    // Connect on answer, immediately. Waiting for AMD costs several seconds of
+    // silence paid for by the person who just said hello, and they hang up.
+    // AMD still arrives and still removes machines.
+    case 'call.answered': {
       await db.call.updateMany({
         where: { id: callId, answeredAt: null },
         data: { answeredAt: new Date() },
       });
-      return { handled: true, eventType, note: 'awaiting AMD' };
+      const routing = await routeAnswer({ sessionId, callId, callControlId });
+      return { handled: true, eventType, note: `answered → ${routing}` };
+    }
 
     case 'call.machine.detection.ended':
     case 'call.machine.premium.detection.ended': {
