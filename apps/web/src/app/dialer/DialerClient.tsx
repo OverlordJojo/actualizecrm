@@ -10,6 +10,7 @@ import {
   type VisibleCustomField,
 } from '@/components/dialer/ActiveLeadCard';
 import { BurstCards } from '@/components/dialer/BurstCards';
+import { LineStrip } from '@/components/dialer/LineStrip';
 import { TrashToast } from '@/components/dialer/TrashToast';
 import { CreateLeadModal } from '@/components/dialer/CreateLeadModal';
 import { DialControls } from '@/components/dialer/DialControls';
@@ -249,6 +250,14 @@ export function DialerClient({
           callId={call.activeCallId}
           live={call.lineState === 'connected'}
         />
+        <div className="flex w-[380px] shrink-0 flex-col gap-2.5">
+          {/* Every live line, with per-line hang up and arrow switching. */}
+          <LineStrip
+            lines={call.lines}
+            leads={call.queue}
+            onSwitch={call.switchToLine}
+            onHangup={call.hangupLine}
+          />
         <DialControls
           lineState={call.lineState}
           muted={call.muted}
@@ -276,8 +285,8 @@ export function DialerClient({
           governor={call.governor}
           linesPerBurst={call.linesPerBurst}
           canHangup={call.canHangup}
-          listeningToVoicemail={call.listeningToVoicemail}
         />
+        </div>
       </div>
 
       {/* Region C */}

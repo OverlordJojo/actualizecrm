@@ -6,6 +6,8 @@ import {
   pauseSession,
   resumeSession,
   hangupActive,
+  switchToCall,
+  hangupCall,
   openBurst,
   bridgeOldestHeld,
   sessionView,
@@ -34,8 +36,10 @@ const startSchema = z.object({
 });
 
 const commandSchema = z.object({
-  action: z.enum(['advance', 'hangup', 'pause', 'resume', 'end']),
+  action: z.enum(['advance', 'hangup', 'pause', 'resume', 'end', 'switch', 'hangupCall']),
   sessionId: z.string().min(1),
+  /// The specific leg, for per-line commands.
+  callId: z.string().optional(),
   /// Leads to open the next burst on, in kanban order. Ignored when somebody is
   /// already on hold — draining beats dialling, and the server decides that so
   /// the two cannot disagree.
@@ -85,6 +89,20 @@ export async function POST(request: Request) {
         return NextResponse.json({ ok: ended, view: await sessionView(sessionId) });
       }
 
+      // Per-line commands. The operator can see every live leg and act on any
+      // of them, not only the one in their ear.
+      case 'switch': {
+        if (!cmd.data.callId) break;
+        const moved = await switchToCall({ sessionId, callId: cmd.data.callId });
+        return NextResponse.json({ ok: moved, view: await sessionView(sessionId) });
+      }
+
+      case 'hangupCall': {
+        if (!cmd.data.callId) break;
+        const ended = await hangupCall({ sessionId, callId: cmd.data.callId });
+        return NextResponse.json({ ok: ended, view: await sessionView(sessionId) });
+      }
+
       case 'pause':
         await pauseSession(sessionId);
         return NextResponse.json({ ok: true, view: await sessionView(sessionId) });
@@ -129,6 +147,8 @@ export async function POST(request: Request) {
         });
       }
     }
+
+    return NextResponse.json({ error: 'That command needs a call id.' }, { status: 400 });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'That did not work.' },

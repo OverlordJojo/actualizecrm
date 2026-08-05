@@ -85,6 +85,16 @@ export interface SessionView {
     amdResult: string | null;
   }[];
 
+  /// Every line that still exists — ringing, live, or parked — in the order
+  /// they were dialled. The operator switches between these.
+  lines: {
+    callId: string;
+    contactId: string;
+    toE164: string;
+    state: 'ringing' | 'active' | 'held';
+    heldSeconds: number;
+  }[];
+
   held: HeldCaller[];
 
   /// Legs that resolved without reaching the operator, most recent first, so
@@ -146,6 +156,22 @@ export async function sessionView(sessionId: string): Promise<SessionView | null
         contactId: c.contactId,
         toE164: c.toE164,
         amdResult: c.amdResult,
+      })),
+
+    lines: calls
+      .filter((c) => c.endedAt === null && c.status !== 'failed')
+      .sort((a, b) => a.startedAt.getTime() - b.startedAt.getTime())
+      .map((c) => ({
+        callId: c.id,
+        contactId: c.contactId,
+        toE164: c.toE164,
+        state:
+          c.id === session.activeCallId
+            ? ('active' as const)
+            : c.heldAt
+              ? ('held' as const)
+              : ('ringing' as const),
+        heldSeconds: c.heldAt ? Math.round((now - c.heldAt.getTime()) / 1000) : 0,
       })),
 
     held: calls

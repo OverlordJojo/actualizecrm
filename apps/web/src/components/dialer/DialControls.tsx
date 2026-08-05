@@ -65,7 +65,6 @@ export function DialControls({
   governor,
   linesPerBurst,
   canHangup,
-  listeningToVoicemail,
 }: {
   lineState: LineState;
   muted: boolean;
@@ -90,8 +89,6 @@ export function DialControls({
   /// True the instant a prospect leg is bridged into the conference, false
   /// otherwise — driven by webhooks, never optimistic (§2.4).
   canHangup: boolean;
-  /// The operator is hearing an answering machine, not a person.
-  listeningToVoicemail?: boolean;
   /// Seconds remaining before the dialer auto-advances, or null when idle.
   countdown: number | null;
   /// Seconds since the prospect answered, or null when not connected.
@@ -126,7 +123,7 @@ export function DialControls({
   const connectRate = stats.dials > 0 ? Math.round((stats.connects / stats.dials) * 100) : 0;
 
   return (
-    <div className="flex w-[380px] shrink-0 flex-col gap-2.5">
+    <div className="flex min-h-0 flex-1 flex-col gap-2.5">
       {/* line status + caller id */}
       <div className="flex items-center gap-2">
         <span className={cn('h-2 w-2 rounded-full', LINE_TONE[lineState])} />

@@ -1095,3 +1095,100 @@ export function explainOperatorFailure(cause: string | null): string {
         : 'The dialer could not reach your softphone, and the carrier gave no reason.';
   }
 }
+
+/**
+ * Moves the operator to a different live caller (§ operator request).
+ *
+ * The spec's model is one conversation at a time with everyone else parked, and
+ * that is still what the audio does — a conference where two prospects can hear
+ * each other would be a disaster. What this adds is the ability to *choose*
+ * which parked caller is the live one, rather than always taking the oldest.
+ *
+ * The current call is parked rather than dropped. Someone the operator stepped
+ * away from is still a prospect who answered, and hanging up on them to talk to
+ * somebody else would be worse than the hold they get instead.
+ */
+export async function switchToCall(params: {
+  sessionId: string;
+  callId: string;
+}): Promise<boolean> {
+  const { sessionId, callId } = params;
+
+  const session = await db.dialSession.findUnique({ where: { id: sessionId } });
+  if (!session?.conferenceId) return false;
+  if (session.activeCallId === callId) return true;
+
+  const target = await db.call.findUnique({ where: { id: callId } });
+  if (!target?.callControlId || target.endedAt) return false;
+
+  // Park whoever is live now.
+  if (session.activeCallId) {
+    const current = await db.call.findUnique({ where: { id: session.activeCallId } });
+    if (current?.callControlId && !current.endedAt) {
+      await holdParticipants({
+        conferenceId: session.conferenceId,
+        callControlIds: [current.callControlId],
+      }).catch(() => {});
+      await db.call.update({
+        where: { id: current.id },
+        data: { status: 'held', heldAt: current.heldAt ?? new Date() },
+      });
+    }
+  }
+
+  await db.dialSession.update({
+    where: { id: sessionId },
+    data: { activeCallId: callId },
+  });
+
+  await unholdParticipants({
+    conferenceId: session.conferenceId,
+    callControlIds: [target.callControlId],
+  }).catch(() => {});
+
+  if (session.operatorLegId) {
+    await unmuteParticipants({
+      conferenceId: session.conferenceId,
+      callControlIds: [session.operatorLegId],
+    }).catch(() => {});
+  }
+
+  const heldSeconds = target.heldAt
+    ? Math.round((Date.now() - target.heldAt.getTime()) / 1000)
+    : target.heldSeconds;
+
+  await db.call.update({
+    where: { id: callId },
+    data: { status: 'answered', bridgedAt: target.bridgedAt ?? new Date(), heldSeconds },
+  });
+
+  return true;
+}
+
+/**
+ * Hangs up one specific leg, live or parked.
+ *
+ * Distinct from `hangupActive`, which only ever releases whoever the operator
+ * is talking to. This is how a ringing or parked line is dropped without
+ * disturbing the conversation in progress — the operator can see a lead they do
+ * not want and clear the line for the next one.
+ */
+export async function hangupCall(params: {
+  sessionId: string;
+  callId: string;
+}): Promise<boolean> {
+  const { sessionId, callId } = params;
+
+  const call = await db.call.findUnique({ where: { id: callId } });
+  if (!call || call.endedAt) return false;
+
+  if (call.callControlId) await hangup(call.callControlId).catch(() => {});
+  await db.call.update({
+    where: { id: callId },
+    data: { status: 'completed', endedAt: new Date() },
+  });
+
+  // Only frees the operator if this was the leg they were on.
+  await releaseActive(sessionId, callId);
+  return true;
+}

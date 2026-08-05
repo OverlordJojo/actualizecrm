@@ -56,6 +56,13 @@ interface SessionView {
     amdResult: string | null;
   }[];
   held: { callId: string; contactId: string; toE164: string; heldSeconds: number }[];
+  lines: {
+    callId: string;
+    contactId: string;
+    toE164: string;
+    state: 'ringing' | 'active' | 'held';
+    heldSeconds: number;
+  }[];
   resolved: {
     callId: string;
     contactId: string;
@@ -148,6 +155,8 @@ export function useDialSession({
   const expectingOperatorLeg = useRef(false);
   /// Guards against firing two advances for one call ending.
   const advancingRef = useRef(false);
+  /// Guards the mid-call top-up, which polls five times a second.
+  const refillingRef = useRef(false);
   /// Read inside async callbacks, which would otherwise close over the line
   /// state as it was when the handler was created.
   const phoneStateRef = useRef<LineState>('offline');
@@ -334,11 +343,49 @@ export function useDialSession({
     }, 1000);
   }, [advance, clearAdvance, gapSeconds]);
 
-  // The loop. When the server says nothing is active and nothing is ringing,
-  // it is time for the next burst — driven by the server's view rather than an
-  // SDK event, because the legs are the server's.
+  /**
+   * The loop, driven by the server's view rather than an SDK event.
+   *
+   * Two shapes, and the difference matters at the operator's throughput:
+   *
+   *   - **Nothing live** → advance after the gap, opening a fresh burst.
+   *   - **A call live but lines idle** → top the lines back up *now*, without
+   *     waiting for the current call to end.
+   *
+   * The second is the "keep three on the line" rule. Waiting for a whole burst
+   * to resolve before dialling again means that after the first person answers,
+   * the other two lines sit empty for the length of the conversation — so a
+   * three-line dialer spends most of its time as a one-line dialer.
+   */
   useEffect(() => {
     if (!view || view.status !== 'live') return;
+
+    const lines = view.linesPerBurst ?? 1;
+    const live = (view.active ? 1 : 0) + view.ringing.length + view.held.length;
+
+    // Top up while a call is in progress. Only when there is real slack — one
+    // spare line is not worth a burst, and refilling on every poll would open
+    // legs faster than AMD can resolve them.
+    if (view.active && lines > 1 && live < lines && !refillingRef.current) {
+      const next = indexRef.current;
+      const upcoming = queueRef.current.slice(next, next + (lines - live));
+      if (upcoming.length > 0) {
+        refillingRef.current = true;
+        void command('advance', { contactIds: upcoming.map((l) => l.id) })
+          .then((r) => {
+            const dialled = (r?.legs ?? []).length;
+            if (dialled > 0) {
+              indexRef.current = next + dialled;
+              setIndex(indexRef.current);
+              setStats((s2) => ({ ...s2, dials: s2.dials + dialled }));
+            }
+          })
+          .finally(() => {
+            refillingRef.current = false;
+          });
+      }
+    }
+
     if (view.active || view.ringing.length > 0) {
       advancingRef.current = false;
       clearAdvance();
@@ -360,7 +407,7 @@ export function useDialSession({
     }
 
     startGap();
-  }, [view, startGap, clearAdvance, trashToast, advance]);
+  }, [view, startGap, clearAdvance, trashToast, advance, command]);
 
   // Expire the undo window, which also releases the advance held above.
   useEffect(() => {
@@ -532,6 +579,23 @@ export function useDialSession({
   const hangup = useCallback(async () => {
     await command('hangup');
   }, [command]);
+
+  /// Moves the operator to another live line, parking the current one.
+  const switchToLine = useCallback(
+    async (callId: string) => {
+      await command('switch', { callId });
+    },
+    [command],
+  );
+
+  /// Drops one specific line — ringing, parked, or live — without disturbing
+  /// the others.
+  const hangupLine = useCallback(
+    async (callId: string) => {
+      await command('hangupCall', { callId });
+    },
+    [command],
+  );
 
   const hangupAndNext = useCallback(async () => {
     if (view?.active) await hangup();
@@ -832,6 +896,9 @@ export function useDialSession({
     incomingIsOperatorLeg: Boolean(phone.incoming) && expectingOperatorLeg.current,
     burstActive: (view?.ringing.length ?? 0) > 0,
     held: view?.held ?? [],
+    lines: view?.lines ?? [],
+    switchToLine,
+    hangupLine,
     governor,
     answerInbound: phone.answer,
     declineInbound: phone.decline,
