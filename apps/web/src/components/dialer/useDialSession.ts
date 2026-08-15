@@ -323,15 +323,34 @@ export function useDialSession({
     });
     advancingRef.current = false;
 
-    // A held caller was served instead of a burst, so the queue pointer does
-    // not move — none of the upcoming leads were dialled.
+    // A held caller was served instead of a burst, so the pointer does not
+    // move — none of the upcoming leads were dialled.
     if (result?.mode === 'burst') {
-      const dialled = (result.legs ?? []).length;
-      indexRef.current = next + Math.max(dialled, 1);
+      /**
+       * The pointer moves past exactly the leads that were dialled, and no
+       * further.
+       *
+       * It used to advance by at least one even when the burst opened nothing,
+       * which quietly skipped leads: three were handed over, one originated,
+       * and the pointer jumped three. Over a session that leaves a trail of
+       * numbers nobody ever called and nobody can see were missed.
+       *
+       * Legs that ring out are not skipped either — a no-answer drops to the
+       * bottom of the column rather than being passed over, so the queue is
+       * always either ahead of the pointer or already dealt with.
+       */
+      const legs = result.legs ?? [];
+      const dialledIds = new Set(
+        legs.filter((l: { callControlId?: string | null }) => l.callControlId)
+          .map((l: { contactId: string }) => l.contactId),
+      );
+
+      const consumed = upcoming.filter((l) => dialledIds.has(l.id)).length;
+      indexRef.current = next + Math.max(consumed, legs.length);
       setIndex(indexRef.current);
       setStats((s) => ({
         ...s,
-        dials: s.dials + dialled,
+        dials: s.dials + dialledIds.size,
         startedAt: s.startedAt ?? Date.now(),
       }));
     }
@@ -569,10 +588,31 @@ export function useDialSession({
     }
   }, [view?.failureReason]);
 
+  /**
+   * Stops opening new bursts. Anything already ringing rings out.
+   *
+   * Pausing does not touch live legs, which is the whole point — a prospect
+   * mid-sentence must not be dropped because the operator wanted a breather
+   * after this call.
+   */
   const pauseSession = useCallback(async () => {
     clearAdvance();
+    advancingRef.current = false;
     await command('pause');
   }, [clearAdvance, command]);
+
+  const resumeSession = useCallback(async () => {
+    advancingRef.current = false;
+    await command('resume');
+  }, [command]);
+
+  /// P toggles. Without this, pausing was a one-way door: the button said Pause
+  /// whether or not it already was, so there was no way back and the dialer
+  /// looked broken.
+  const togglePause = useCallback(async () => {
+    if (view?.status === 'paused') await resumeSession();
+    else await pauseSession();
+  }, [view?.status, pauseSession, resumeSession]);
 
   const endSession = useCallback(async () => {
     clearAdvance();
@@ -836,7 +876,7 @@ export function useDialSession({
         case 'p':
         case 'P':
           e.preventDefault();
-          if (sessionIdRef.current) void pauseSession();
+          if (sessionIdRef.current) void togglePause();
           else void startSession();
           break;
         case 'Escape':
@@ -849,7 +889,7 @@ export function useDialSession({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [hangupAndNext, setDisposition, pauseSession, startSession, endSession, dropVoicemail]);
+  }, [hangupAndNext, setDisposition, togglePause, startSession, endSession, dropVoicemail]);
 
   useEffect(() => () => clearAdvance(), [clearAdvance]);
 
@@ -933,6 +973,9 @@ export function useDialSession({
 
     startSession,
     pauseSession,
+    resumeSession,
+    togglePause,
+    paused: view?.status === 'paused',
     endSession,
     dialManual,
     hangup,

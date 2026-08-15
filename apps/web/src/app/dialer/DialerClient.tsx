@@ -269,7 +269,7 @@ export function DialerClient({
           countdown={call.countdown}
           callSeconds={call.callSeconds}
           onStartSession={call.startSession}
-          onPauseSession={call.pauseSession}
+          onPauseSession={call.togglePause}
           onEndSession={call.endSession}
           onManualDial={call.dialManual}
           onHangup={call.hangup}
@@ -286,6 +286,7 @@ export function DialerClient({
           linesPerBurst={call.linesPerBurst}
           canHangup={call.canHangup}
           sessionStats={call.sessionStats}
+          paused={call.paused}
         />
         </div>
       </div>

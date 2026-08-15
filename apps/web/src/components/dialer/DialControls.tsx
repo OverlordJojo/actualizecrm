@@ -66,6 +66,7 @@ export function DialControls({
   linesPerBurst,
   canHangup,
   sessionStats,
+  paused,
 }: {
   lineState: LineState;
   muted: boolean;
@@ -90,6 +91,8 @@ export function DialControls({
   /// True the instant a prospect leg is bridged into the conference, false
   /// otherwise — driven by webhooks, never optimistic (§2.4).
   canHangup: boolean;
+  /// Paused stops new bursts; anything already ringing rings out.
+  paused?: boolean;
   /// Session figures counted from call rows on the server (§6.2).
   sessionStats: {
     dials: number;
@@ -244,8 +247,11 @@ export function DialControls({
           </button>
         ) : (
           <>
-            <button className="btn-ghost py-1.5 text-xs" onClick={onPauseSession}>
-              Pause <Key>P</Key>
+            <button
+              className={cn('py-1.5 text-xs', paused ? 'btn-primary' : 'btn-ghost')}
+              onClick={onPauseSession}
+            >
+              {paused ? 'Resume' : 'Pause'} <Key>P</Key>
             </button>
             <button className="btn-ghost py-1.5 text-xs" onClick={onEndSession}>
               End <Key>Esc</Key>
@@ -317,6 +323,12 @@ export function DialControls({
         <div className="rounded-lg bg-violet-500/10 px-2.5 py-1.5 text-xs text-violet-200">
           Playing &ldquo;{dropping}&rdquo; — hangs up on its own when the
           recording finishes.
+        </div>
+      )}
+
+      {paused && (
+        <div className="rounded-lg border border-amber-800 bg-amber-950/40 px-2.5 py-1.5 text-[11px] text-amber-100">
+          Paused. Lines already ringing will finish; nothing new is dialled.
         </div>
       )}
 

@@ -325,6 +325,31 @@ export interface BurstLeg {
  * safely — but it is reported back so the UI can say why three lines produced
  * one leg.
  */
+/**
+ * Sends a lead to the back of its column.
+ *
+ * Used for legs that rang out. They are not skipped and not deleted — they
+ * simply stop being next, so the queue in front of the operator is always
+ * people who have not been tried today rather than the same unanswered numbers
+ * cycling round.
+ */
+export async function sendToBackOfColumn(contactId: string): Promise<void> {
+  const contact = await db.contact.findUnique({
+    where: { id: contactId },
+    select: { stageId: true },
+  });
+  if (!contact?.stageId) return;
+
+  const last = await db.contact.aggregate({
+    where: { stageId: contact.stageId },
+    _max: { stagePosition: true },
+  });
+  await db.contact.update({
+    where: { id: contactId },
+    data: { stagePosition: (last._max.stagePosition ?? 0) + 1 },
+  });
+}
+
 export async function openBurst(
   sessionId: string,
   contactIds: string[],

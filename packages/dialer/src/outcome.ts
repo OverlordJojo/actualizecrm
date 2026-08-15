@@ -14,6 +14,15 @@ import { db } from '@actualizecrm/db';
  * §7.6).
  */
 
+/// The reverse of OUTCOME_STAGE: the model suggests a stage, and applying it
+/// needs the outcome that files a lead there.
+const DISPOSITION_FOR_STAGE: Record<string, string> = {
+  Callback: 'callback',
+  Interested: 'interested',
+  Booked: 'booked',
+  'Not Interested': 'not_interested',
+};
+
 /// Maps an outcome to the stage it files the lead into. `null` means trash.
 const OUTCOME_STAGE: Record<string, string | null> = {
   not_interested: null,
@@ -236,6 +245,41 @@ export async function applyAutoOutcome(params: {
   });
 
   if (disposition === 'not_interested') {
+    /**
+     * Before defaulting to a no, take the AI's read (operator instruction).
+     *
+     * The panel highlights what the model believes the call was, and the
+     * operator confirms with one key. When they hang up without confirming —
+     * which is most calls, because the next one is already ringing — that
+     * highlight is still the best available reading of what happened, and
+     * throwing it away to file everything as Not Interested loses real
+     * callbacks.
+     *
+     * Only ever used when the operator chose nothing. An explicit outcome is
+     * never overridden by a model, and a suggestion the operator has already
+     * dismissed is not resurrected.
+     */
+    const suggested = await db.aiSuggestion.findFirst({
+      where: {
+        callId: params.callId,
+        fieldType: 'stage',
+        outcome: 'pending',
+        confidence: { gte: 0.6 },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const fromAi = suggested?.value ? DISPOSITION_FOR_STAGE[suggested.value] : null;
+
+    if (fromAi) {
+      await db.aiSuggestion.update({
+        where: { id: suggested!.id },
+        data: { outcome: 'auto_applied', decidedAt: new Date() },
+      });
+      const result = await applyOutcome({ callId: params.callId, disposition: fromAi });
+      return { ...result, note: `auto-applied the AI's read: ${fromAi}` };
+    }
+
     return applyOutcome({ callId: params.callId, disposition });
   }
 
@@ -255,7 +299,9 @@ export async function applyAutoOutcome(params: {
     },
   });
 
-  if (disposition === 'no_answer' && call.contactId) {
+  // Rang out. Not skipped, not deleted — just no longer next, so the queue in
+  // front of the operator is always people who have not been tried today.
+  if (disposition === 'no_answer' || disposition === 'failed') {
     const contact = await db.contact.findUnique({
       where: { id: call.contactId },
       select: { stageId: true },

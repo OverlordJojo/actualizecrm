@@ -1,5 +1,6 @@
 'use client';
 
+import { useRef } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import { cn } from '@/lib/cn';
@@ -29,6 +30,9 @@ export function LeadCard({
   selected?: boolean;
   onSelect?: (leadId: string, selected: boolean) => void;
 }) {
+  /// Where the pointer went down, so a drag can be told from a click.
+  const pressRef = useRef<{ x: number; y: number; at: number } | null>(null);
+
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: lead.id,
     disabled: overlay,
@@ -44,11 +48,33 @@ export function LeadCard({
       {...listeners}
       {...attributes}
       style={{ transform: CSS.Translate.toString(transform) }}
-      // A click opens the lead; a drag moves it. The 4px activation distance on
-      // the sensor is what keeps the two apart — without it every click starts
-      // a drag and the card can never be opened.
-      onClick={() => {
-        if (!overlay && !isDragging) onOpen?.(lead.id);
+      /**
+       * Opens the lead only on a deliberate, stationary click.
+       *
+       * `isDragging` is false again by the time the click fires at the end of a
+       * drag, so relying on it alone meant dropping a card also opened it —
+       * which is why a contact kept appearing uninvited after moving one, and
+       * after the board re-rendered under the cursor mid-session.
+       *
+       * Measuring the pointer's own movement is the only thing that actually
+       * distinguishes the two gestures.
+       */
+      onPointerDown={(e) => {
+        pressRef.current = { x: e.clientX, y: e.clientY, at: Date.now() };
+      }}
+      onClick={(e) => {
+        if (overlay || isDragging) return;
+        const press = pressRef.current;
+        pressRef.current = null;
+        if (!press) return;
+
+        const moved =
+          Math.abs(e.clientX - press.x) > 4 || Math.abs(e.clientY - press.y) > 4;
+        // A long hold is a drag the operator thought better of, not a click.
+        const held = Date.now() - press.at > 400;
+        if (moved || held) return;
+
+        onOpen?.(lead.id);
       }}
       className={cn(
         'group relative cursor-grab select-none rounded-lg border bg-ink-900 px-2.5 py-2 active:cursor-grabbing',
