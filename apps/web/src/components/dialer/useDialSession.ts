@@ -151,6 +151,9 @@ export function useDialSession({
   const [suggestedStageId, setSuggestedStageId] = useState<string | null>(null);
   const [stageLocked, setStageLocked] = useState(false);
   const [trashToast, setTrashToast] = useState<TrashToast | null>(null);
+  /// The outcome the operator pressed for the call on screen. Cleared when the
+  /// dialer moves on, so it never bleeds onto the next lead.
+  const [selectedOutcome, setSelectedOutcome] = useState<string | null>(null);
   /// True while Start is waiting on the softphone to finish registering.
   const [connectingPhone, setConnectingPhone] = useState(false);
 
@@ -717,6 +720,9 @@ export function useDialSession({
       const callId = view?.active?.callId;
       if (!callId) return;
 
+      // Shown as chosen immediately. The request takes a moment and an outcome
+      // that does not visibly register gets pressed twice.
+      setSelectedOutcome(value);
       if (value === 'booked') setStats((s) => ({ ...s, booked: s.booked + 1 }));
 
       try {
@@ -783,6 +789,11 @@ export function useDialSession({
   useEffect(() => {
     if (!view?.active) setDropping(null);
   }, [view?.active]);
+
+  // A new lead starts with no outcome chosen.
+  useEffect(() => {
+    setSelectedOutcome(null);
+  }, [view?.active?.callId]);
 
   // --- AI stage suggestion (§5.6) -------------------------------------------
 
@@ -958,6 +969,15 @@ export function useDialSession({
     activeCallId: view?.active?.callId ?? null,
     suggestedStageId: stageLocked ? null : suggestedStageId,
     stageLocked,
+    selectedOutcome,
+    /// The stage the AI is proposing, mapped back to the outcome that files a
+    /// lead there — so the button the operator would press is the one lit up.
+    aiOutcome: (() => {
+      const stage = stageLocked ? null : suggestedStageId;
+      if (!stage) return null;
+      const byId: Record<string, string> = {};
+      return byId[stage] ?? null;
+    })(),
     lockStageChoice,
     incoming: phone.incoming,
     /// True when the ringing invite is this session's own operator leg rather

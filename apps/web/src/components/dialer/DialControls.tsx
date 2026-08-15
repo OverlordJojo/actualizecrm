@@ -67,6 +67,8 @@ export function DialControls({
   canHangup,
   sessionStats,
   paused,
+  selectedOutcome,
+  aiOutcome,
 }: {
   lineState: LineState;
   muted: boolean;
@@ -93,6 +95,11 @@ export function DialControls({
   canHangup: boolean;
   /// Paused stops new bursts; anything already ringing rings out.
   paused?: boolean;
+  /// The outcome the operator has chosen for the call on screen, filled in so
+  /// it is obvious the press registered.
+  selectedOutcome?: string | null;
+  /// The outcome the AI believes applies, outlined until confirmed (§5.6).
+  aiOutcome?: string | null;
   /// Session figures counted from call rows on the server (§6.2).
   sessionStats: {
     dials: number;
@@ -346,18 +353,36 @@ export function DialControls({
           Outcome
         </div>
         <div className="grid grid-cols-5 gap-1">
-          {DISPOSITIONS.map((d) => (
+          {DISPOSITIONS.map((d) => {
+            const chosen = selectedOutcome === d.value;
+            const suggested = !selectedOutcome && aiOutcome === d.value;
+            return (
             <button
               key={d.value}
               onClick={() => onDisposition(d.value)}
-              className="flex flex-col items-center gap-0.5 rounded-lg border border-ink-700 bg-ink-850 px-1 py-1.5 text-[10px] font-medium leading-tight text-ink-200 transition-colors hover:bg-ink-800"
-              style={{ borderBottomColor: d.color, borderBottomWidth: 2 }}
+              className={cn(
+                'flex flex-col items-center gap-0.5 rounded-lg border px-1 py-1.5 text-[10px] font-medium leading-tight transition-colors',
+                chosen
+                  ? 'text-ink-950'
+                  : suggested
+                    // The AI's read, offered rather than applied (§3.5, §5.6).
+                    // Outlined, not filled: it is a proposal until the operator
+                    // presses it, and it fills in the moment they do.
+                    ? 'border-violet-500 bg-violet-500/10 text-ink-100'
+                    : 'border-ink-700 bg-ink-850 text-ink-200 hover:bg-ink-800',
+              )}
+              style={
+                chosen
+                  ? { backgroundColor: d.color, borderColor: d.color }
+                  : { borderBottomColor: d.color, borderBottomWidth: 2 }
+              }
               title={`${d.label} (${d.hotkey})`}
             >
               <span className="text-center">{d.label}</span>
               <Key>{d.hotkey}</Key>
             </button>
-          ))}
+            );
+          })}
         </div>
       </div>
 

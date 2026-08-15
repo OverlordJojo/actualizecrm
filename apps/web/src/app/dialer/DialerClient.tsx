@@ -291,6 +291,8 @@ export function DialerClient({
           canHangup={call.canHangup}
           sessionStats={call.sessionStats}
           paused={call.paused}
+          selectedOutcome={call.selectedOutcome}
+          aiOutcome={call.aiOutcome}
         />
         </div>
       </div>

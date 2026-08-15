@@ -309,6 +309,14 @@ async function handleSessionEvent(
         where: { id: callId, answeredAt: null },
         data: { answeredAt: new Date() },
       });
+
+      // Recording was never started on a session leg — the conference rewrite
+      // kept transcription and dropped this, so no call the dialer placed has
+      // been recorded since. Dual channel, so the operator and the prospect
+      // stay separable in the archive.
+      startRecording(callControlId).catch((e) =>
+        console.error('[telnyx] record_start failed', e),
+      );
       // Transcription has to be running before the greeting starts, or there
       // is nothing to screen it with. Best-effort: a call that cannot be
       // transcribed still connects.
@@ -559,8 +567,19 @@ async function appendLiveSegment(callId: string, segment: LiveSegment): Promise<
  * direction costs a mislabelled line; guessing wrong in the other switched off
  * every safeguard at once.
  */
-function speakerFor(track: string | undefined): 'Prospect' | 'You' {
-  return track === 'outbound' ? 'You' : 'Prospect';
+function speakerFor(_track: string | undefined): 'Prospect' | 'You' {
+  /**
+   * Always the prospect, on a prospect's leg.
+   *
+   * Telnyx's `track` is named relative to the leg, so on a call we placed the
+   * far end arrives as `outbound` — the reverse of the obvious reading, and the
+   * reason every greeting was stored as something the operator said.
+   *
+   * There is nothing to disambiguate anyway. The operator is on a separate leg
+   * bridged to this one; this leg's audio is the prospect's. Taking the
+   * carrier's word for it was the mistake.
+   */
+  return 'Prospect';
 }
 
 /// US formatting only; every number this app stores is E.164 and almost always
