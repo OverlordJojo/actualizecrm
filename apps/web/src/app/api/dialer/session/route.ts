@@ -116,9 +116,18 @@ export async function POST(request: Request) {
         return NextResponse.json({ ok: true, view: await sessionView(sessionId) });
 
       case 'advance': {
-        // Anybody already listening to hold music has a stronger claim on the
-        // operator than a lead who has not been dialled, so drain first and
-        // only burst when the queue is empty (§2.2 step 9).
+        /**
+         * Drain before dialling, always (§2.2 step 9).
+         *
+         * Somebody on hold answered the phone. A lead in the queue has not.
+         * Serving the person who is already there is both the courteous order
+         * and the profitable one — and it is what keeps the abandonment rate
+         * under the cap, since every held second counts against it.
+         *
+         * When several owners answered at once this drains them one after
+         * another, oldest first, opening no new burst until the last is dealt
+         * with.
+         */
         const bridged = await bridgeOldestHeld(sessionId);
         if (bridged) {
           return NextResponse.json({

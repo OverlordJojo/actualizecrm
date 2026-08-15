@@ -849,16 +849,16 @@ export async function routeAmdVerdict(params: {
   await db.call.update({ where: { id: callId }, data: { amdResult: verdict } });
 
   /**
-   * A person reaches the operator. Nothing else does.
+   * The verdict removes; it does not connect. Connection happened on answer.
    *
-   * `not_sure` counts as a person: the same number has come back
-   * human_residence on one call and not_sure on the next, and dropping an
-   * uncertain verdict hangs up on real people. A machine that slips through as
-   * not_sure is caught a second later by the greeting screen, which reads what
-   * was said rather than guessing from tone.
+   * `not_sure` therefore stays on the line rather than being dropped — the same
+   * number has come back human_residence on one call and not_sure on the next,
+   * and hanging up on an uncertain verdict hangs up on real people. A recording
+   * that slips through as not_sure is caught within a few words by the greeting
+   * screen, and by the seventh second by the monologue test.
    */
   if (!isMachineVerdict(verdict) && !isFaxVerdict(verdict)) {
-    return routeAnswer({ sessionId, callId, callControlId });
+    return call.bridgedAt ? 'bridged' : call.heldAt ? 'held' : 'ignored';
   }
 
   const machine = isMachineVerdict(verdict);

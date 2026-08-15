@@ -392,10 +392,21 @@ export function useDialSession({
     const lines = view.linesPerBurst ?? 1;
     const live = (view.active ? 1 : 0) + view.ringing.length + view.held.length;
 
-    // Top up while a call is in progress. Only when there is real slack — one
-    // spare line is not worth a burst, and refilling on every poll would open
-    // legs faster than AMD can resolve them.
-    if (view.active && lines > 1 && live < lines && !refillingRef.current) {
+    /**
+     * Never dial while somebody who answered is waiting.
+     *
+     * A person on hold has already picked up the phone. Opening new lines
+     * around them spends the operator's next free moment on a stranger who has
+     * not answered yet, while the one who did drifts toward giving up — and
+     * every second they wait counts against the abandonment rate that caps the
+     * whole operation.
+     *
+     * So a queued owner is not merely first in line: while one exists, nothing
+     * else is dialled at all.
+     */
+    const someoneWaiting = (view.held?.length ?? 0) > 0;
+
+    if (view.active && lines > 1 && live < lines && !someoneWaiting && !refillingRef.current) {
       const next = indexRef.current;
       const upcoming = queueRef.current.slice(next, next + (lines - live));
       if (upcoming.length > 0) {

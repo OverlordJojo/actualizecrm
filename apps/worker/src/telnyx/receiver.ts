@@ -7,7 +7,11 @@ import {
 import { enqueue } from '../queue';
 import { claimEvent, releaseEvent } from './dedupe';
 import { resolveProbe, PROBE_KIND } from './probe';
-import { routeAmdVerdict, screenVoicemailGreeting } from '@actualizecrm/dialer';
+import {
+  routeAmdVerdict,
+  routeAnswer,
+  screenVoicemailGreeting,
+} from '@actualizecrm/dialer';
 
 /**
  * The Telnyx webhook endpoint (§1.2).
@@ -221,12 +225,39 @@ export async function handleTelnyxWebhook(
   }
 
   if (eventType === 'call.answered' && state?.k === 'session' && state.role === 'prospect') {
-    // Answering does not connect anybody — the verdict does that. What it does
-    // do is start the transcript, which has to be running *before* a greeting
-    // begins or the screen has nothing to read when it matters.
+    // The transcript has to be running *before* a greeting begins, or the
+    // screen has nothing to read at the moment it matters.
     void startTranscription(
       String(envelope.data?.payload?.call_control_id ?? ''),
     ).catch(() => {});
+
+    /**
+     * Connect on answer, and let the detectors take machines away.
+     *
+     * This is the last time this decision moves. The two requirements — hear
+     * the prospect's opening line, never listen to a recording — cannot both be
+     * fully satisfied, because detection needs about a second of audio before
+     * it can judge. Something has to give, and the honest question is which
+     * mistake costs more.
+     *
+     * Bridging late costs the first sentence of every human who answers, which
+     * is the sentence that tells the operator who picked up and how to open.
+     * Bridging early costs a second or so of a recording, on the minority of
+     * calls that reach one, before it is dropped automatically and the lead
+     * files itself.
+     *
+     * The first is a cost on every good call; the second is a cost on bad ones
+     * the operator was going to abandon anyway. So: connect immediately, and
+     * make removal fast rather than making connection slow.
+     */
+    const legState = state as unknown as { sessionId: string; callId?: string };
+    if (legState.callId) {
+      void routeAnswer({
+        sessionId: legState.sessionId,
+        callId: legState.callId,
+        callControlId: String(envelope.data?.payload?.call_control_id ?? ''),
+      }).catch((err) => console.error('[telnyx] fast-path answer failed', err));
+    }
   }
 
   try {
