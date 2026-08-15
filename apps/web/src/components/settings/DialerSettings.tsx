@@ -28,6 +28,7 @@ export function DialerSettings() {
   const [rate, setRate] = useState('0.005');
   const [hold, setHold] = useState('25');
   const [ring, setRing] = useState('30');
+  const [enforceCap, setEnforceCap] = useState(false);
   const [gov, setGov] = useState<Governor | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
 
@@ -44,6 +45,7 @@ export function DialerSettings() {
         setRate(s['analytics.ratePerMinute'] ?? '0.005');
         setHold(s['dialer.holdMaxSeconds'] ?? '25');
         setRing(s['dialer.maxRingSeconds'] ?? '30');
+        setEnforceCap(s['dialer.enforceAbandonmentCap'] === 'true');
       })
       .catch(() => {});
     loadGovernor();
@@ -86,6 +88,33 @@ export function DialerSettings() {
       )}
 
       <div className="panel space-y-3 p-3">
+        <label className="flex items-start gap-2">
+          <input
+            type="checkbox"
+            className="mt-0.5 h-3.5 w-3.5 accent-brand-500"
+            checked={enforceCap}
+            onChange={(e) => {
+              setEnforceCap(e.target.checked);
+              save(
+                { 'dialer.enforceAbandonmentCap': String(e.target.checked) },
+                'Abandonment enforcement',
+              );
+            }}
+          />
+          <span className="text-xs text-ink-400">
+            <span className="font-medium text-ink-200">
+              Let the dialer clamp lines on abandonment
+            </span>
+            <br />
+            US telemarketing rules cap abandoned calls at 3% of live answers.
+            The rate is measured and shown either way — this decides whether the
+            dialer acts on it by dropping to a single line, or leaves that to
+            you. Off by default, and it will not act below 50 answered calls
+            because a percentage over a smaller sample is arithmetic rather than
+            a rate.
+          </span>
+        </label>
+
         <div className="flex items-center gap-3">
           <div>
             <label className="label">Ring for</label>

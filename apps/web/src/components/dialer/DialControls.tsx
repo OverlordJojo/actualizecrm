@@ -339,8 +339,9 @@ export function DialControls({
         </div>
       )}
 
-      {/* dispositions */}
-      <div>
+      {/* Outcomes sit above the stats and never shrink. They are the four keys
+          the operator reaches for on every call. */}
+      <div className="shrink-0">
         <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-ink-500">
           Outcome
         </div>
@@ -364,7 +365,7 @@ export function DialControls({
           Owner pickup rate leads, because it is the only one that says whether
           the hour was worth spending: dials measure effort, this measures
           reaching the person who can actually say yes (§6.3). */}
-      <div className="mt-auto grid grid-cols-8 gap-1 border-t border-ink-800 pt-2">
+      <div className="mt-2 grid grid-cols-8 gap-1 border-t border-ink-800 pt-2">
         <Stat
           label="Owner"
           value={

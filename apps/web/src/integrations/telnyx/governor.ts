@@ -114,7 +114,47 @@ export async function abandonmentState(): Promise<GovernorState> {
     MAX_LINES_PER_BURST,
   );
 
-  const { allowedLines, warning, blocked } = clampLines(rate, configuredLines);
+  /**
+   * Whether the rate is allowed to steer the dialer (operator setting, default
+   * off).
+   *
+   * The cap itself is a real obligation — 47 CFR 64.1200 caps abandoned calls
+   * at 3% of live answers — and it is still measured and still shown on every
+   * session so the operator can see where they stand. What is configurable is
+   * whether the app enforces it *for* them, and that is now their call, made
+   * explicitly.
+   *
+   * It defaults off because automatic enforcement was doing more harm than
+   * good: with eleven answered calls on the clock, two abandons — both caused
+   * by faults in this app during debugging, not by anybody dialing too hard —
+   * read as 18% and hard-blocked multi-line. A percentage over a sample that
+   * small is arithmetic, not a rate.
+   */
+  const enforcing = (await getSetting('dialer.enforceAbandonmentCap')) === 'true';
+
+  /**
+   * And even when enforcing, a floor on the sample.
+   *
+   * One abandoned call out of five is 20%, and means nothing. Below this many
+   * live answers the rate is reported but not acted on, because acting on it
+   * would mostly be acting on noise.
+   */
+  const MIN_SAMPLE = 50;
+  const meaningful = denominator >= MIN_SAMPLE;
+
+  const { allowedLines, warning, blocked } =
+    enforcing && meaningful
+      ? clampLines(rate, configuredLines)
+      : {
+          allowedLines: configuredLines,
+          blocked: false,
+          warning:
+            enforcing && rate > 0.03
+              ? `Abandonment is ${(rate * 100).toFixed(1)}% over ${denominator} answered calls — too few to act on yet, so lines are unchanged.`
+              : rate > 0.03
+                ? `Abandonment is ${(rate * 100).toFixed(1)}% over the last 30 days. Automatic line clamping is off, so this is yours to manage.`
+                : null,
+        };
 
   return {
     rate,

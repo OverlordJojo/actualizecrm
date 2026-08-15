@@ -30,6 +30,10 @@ export const SETTING_DEFAULTS = {
   /// identification line and then nothing, which is worse than music but still
   /// better than a mixer in the audio path for everybody else.
   'dialer.holdMusicUrl': '',
+  /// Whether the dialer clamps its own line count on the rolling abandonment
+  /// rate. Off means the operator is enforcing the cap themselves — the rate is
+  /// still measured and still shown, it just stops steering.
+  'dialer.enforceAbandonmentCap': 'false',
 
   // Analytics
   /// Seconds a human must stay on the line to count as the owner rather than

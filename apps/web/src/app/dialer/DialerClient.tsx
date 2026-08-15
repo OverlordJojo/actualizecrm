@@ -250,7 +250,11 @@ export function DialerClient({
           callId={call.activeCallId}
           live={call.lineState === 'connected'}
         />
-        <div className="flex w-[380px] shrink-0 flex-col gap-2.5">
+        {/* Region B scrolls. A warning banner used to push the outcome buttons
+            past the bottom of a fixed-height row with overflow hidden, which
+            put the four keys the operator needs most out of reach at exactly
+            the moment something had gone wrong. */}
+        <div className="scroll-thin flex w-[380px] shrink-0 flex-col gap-2.5 overflow-y-auto">
           {/* Every live line, with per-line hang up and arrow switching. */}
           <LineStrip
             lines={call.lines}
