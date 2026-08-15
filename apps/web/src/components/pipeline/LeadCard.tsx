@@ -61,6 +61,11 @@ export function LeadCard({
        */
       onPointerDown={(e) => {
         pressRef.current = { x: e.clientX, y: e.clientY, at: Date.now() };
+        // **Hand the event on.** `{...listeners}` above supplies dnd-kit's own
+        // onPointerDown, and declaring one after the spread replaces it rather
+        // than adding to it — which is how dragging stopped working entirely.
+        // The spread has to stay before this, so the delegation is explicit.
+        listeners?.onPointerDown?.(e);
       }}
       onClick={(e) => {
         if (overlay || isDragging) return;
