@@ -88,6 +88,19 @@ const SPOKEN_DIGITS =
  * system for seven zero two…" opens like a person and is not one.
  */
 const DECISIVE_CARRIER = [
+  // Taken verbatim from transcripts this dialer actually produced. Real speech
+  // recognition writes contractions, drops words and mishears — patterns built
+  // from how a carrier script reads on paper miss it.
+  'the person you called',
+  'the person you dialed',
+  'the person you dialled',
+  "hasn't been set up",
+  "has not been set up",
+  'voice mailbox',
+  'voicemail box',
+  'is not set up',
+  'mailbox is full',
+  'not accepting messages',
   // Menus. An IVR is not a mailbox and there is nobody to leave a message for;
   // hearing one tells the operator only that they have not reached a person.
   'press one',
@@ -131,6 +144,7 @@ const DECISIVE_CARRIER = [
  */
 const CARRIER_OPENINGS = [
   'the person you',
+  'leave a message because',
   'the party you',
   'the number you',
   'the subscriber you',

@@ -940,8 +940,17 @@ export function useDialSession({
     sessionId,
     activeLead,
     ringingLeads,
-    /// Drives Hang up. Real leg state from webhooks — never optimistic (§2.4).
-    canHangup: Boolean(view?.active),
+    /**
+     * Drives Hang up. Real leg state from webhooks — never optimistic (§2.4).
+     *
+     * Enabled whenever *anything* is live, not only when the active pointer is
+     * set. The pointer can lag reality by a webhook, and a hang-up button that
+     * is greyed out while somebody is talking is the single most frustrating
+     * thing this dialer can do.
+     */
+    canHangup:
+      Boolean(view?.active) ||
+      (view?.lines ?? []).some((l) => l.state === 'active' || l.state === 'held'),
     /// True while the operator is hearing a machine's greeting, not a person.
     listeningToVoicemail: Boolean(view?.active?.isVoicemail),
     resolved: view?.resolved ?? [],

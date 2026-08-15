@@ -214,7 +214,9 @@ export async function handleTelnyxWebhook(
     const t = envelope.data?.payload?.transcription_data as
       | { transcript?: string; track?: string }
       | undefined;
-    if (legState.callId && t?.transcript && t.track === 'inbound') {
+    // Not gated on `track`: Telnyx does not reliably send it, and gating on it
+    // is what stopped every greeting from being screened.
+    if (legState.callId && t?.transcript) {
       void screenVoicemailGreeting({
         sessionId: legState.sessionId,
         callId: legState.callId,

@@ -389,16 +389,14 @@ async function handleSessionEvent(
        * every line.
        */
       if (t.is_final === false) {
-        if (t.track === 'inbound') {
-          const kind = await screenVoicemailGreeting({
-            sessionId,
-            callId,
-            callControlId,
-            transcript: t.transcript,
-          });
-          if (kind === 'carrier' || kind === 'human') {
-            return { handled: true, eventType, note: `greeting=${kind} (partial)` };
-          }
+        const kind = await screenVoicemailGreeting({
+          sessionId,
+          callId,
+          callControlId,
+          transcript: t.transcript,
+        });
+        if (kind === 'carrier' || kind === 'human') {
+          return { handled: true, eventType, note: `greeting=${kind} (partial)` };
         }
         return { handled: true, eventType, note: 'interim' };
       }
@@ -416,7 +414,7 @@ async function handleSessionEvent(
       });
 
       // Screened on finals too, in case every partial was ambiguous.
-      if (call && t.track === 'inbound') {
+      if (call) {
         const kind = await screenVoicemailGreeting({
           sessionId,
           callId,
@@ -429,10 +427,8 @@ async function handleSessionEvent(
       }
 
       if (call?.disposition !== 'voicemail') {
-        // A prospect turn is the trigger for extraction (§5.3). The operator's
-        // own words are never a source: reading an email back to confirm it is
-        // not the prospect providing one.
-        if (call && t.track === 'inbound') {
+        // A prospect turn is the trigger for extraction (§5.3).
+        if (call && speakerFor(t.track) === 'Prospect') {
           void relayLiveExtraction(callId, call.contactId);
         }
         return { handled: true, eventType, note: 'transcript appended' };
@@ -546,6 +542,25 @@ async function appendLiveSegment(callId: string, segment: LiveSegment): Promise<
       transcriptStatus: call.transcriptStatus === 'done' ? 'done' : 'running',
     },
   });
+}
+
+/**
+ * Who is speaking on a prospect leg.
+ *
+ * **Do not gate anything on `track === 'inbound'`.** Telnyx does not reliably
+ * send that value, and every filter built on it — the greeting screen, the
+ * machine drop, the callback attribution, live extraction — silently never ran.
+ * Answering machine greetings were being stored labelled "You", which is how it
+ * showed: the operator's own transcript full of other companies' voicemail
+ * scripts.
+ *
+ * The leg being transcribed is the prospect's, so the prospect is the default
+ * and only an explicit `outbound` marks the operator. Guessing wrong in this
+ * direction costs a mislabelled line; guessing wrong in the other switched off
+ * every safeguard at once.
+ */
+function speakerFor(track: string | undefined): 'Prospect' | 'You' {
+  return track === 'outbound' ? 'You' : 'Prospect';
 }
 
 /// US formatting only; every number this app stores is E.164 and almost always

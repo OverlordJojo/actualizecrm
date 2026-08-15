@@ -918,13 +918,36 @@ export async function routeAmdVerdict(params: {
  */
 export async function hangupActive(sessionId: string): Promise<boolean> {
   const session = await db.dialSession.findUnique({ where: { id: sessionId } });
-  if (!session?.activeCallId) return false;
+  if (!session) return false;
 
-  const call = await db.call.findUnique({ where: { id: session.activeCallId } });
-  if (!call) return false;
+  /**
+   * Falls back to whatever is actually live.
+   *
+   * Hang up used to do nothing whenever `activeCallId` was out of step with
+   * reality — a bridge that landed while the claim lost a race, or a slot
+   * cleared by a webhook a moment early. The operator pressed the button, a
+   * prospect stayed on the line, and nothing happened.
+   *
+   * A control that silently does nothing is worse than one that is greyed out,
+   * so it now finds the live leg rather than trusting a pointer to it.
+   */
+  const call =
+    (session.activeCallId
+      ? await db.call.findUnique({ where: { id: session.activeCallId } })
+      : null) ??
+    (await db.call.findFirst({
+      where: { sessionId, endedAt: null, bridgedAt: { not: null } },
+      orderBy: { bridgedAt: 'desc' },
+    }));
+
+  if (!call || call.endedAt) return false;
 
   if (call.callControlId) await hangup(call.callControlId).catch(() => {});
-  await releaseActive(sessionId, session.activeCallId);
+  await db.call.updateMany({
+    where: { id: call.id, endedAt: null },
+    data: { status: 'completed', endedAt: new Date() },
+  });
+  await releaseActive(sessionId, call.id);
   return true;
 }
 
