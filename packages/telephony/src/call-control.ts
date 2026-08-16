@@ -103,7 +103,21 @@ export async function stopRecording(callControlId: string): Promise<void> {
  */
 export async function startTranscription(callControlId: string): Promise<void> {
   await callControl(callControlId, 'transcription_start', {
-    transcription_engine: 'B',
+    /**
+     * Engine A rather than B.
+     *
+     * B is Telnyx's own and was landing its first segment four to ten seconds
+     * after answer — measured, not guessed, across a real session. That lag is
+     * the entire reason machine filtering felt like a choice between hearing
+     * voicemails and missing a person's first sentence: the words that identify
+     * a recording were arriving long after the operator had heard it.
+     *
+     * A is Google's, which streams. If it lands segments in the first second or
+     * two, the choice disappears — the call can connect on answer *and* a
+     * recording can be gone before it says anything. Kept in an env var so it
+     * can be put back without a deploy if the accuracy is worse.
+     */
+    transcription_engine: process.env.TELNYX_TRANSCRIPTION_ENGINE || 'A',
     language: 'en',
     /**
      * Partial results, on purpose.
