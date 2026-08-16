@@ -754,14 +754,27 @@ export async function screenVoicemailGreeting(params: {
     where: { id: call.contactId },
     data: {
       ...nameUpdate,
-      lastDisposition: 'callback',
+      // Same reasoning: the badge on the card should say Voicemail, because
+      // that is what happened. Callback is where it now sits.
+      lastDisposition: 'voicemail',
       ...(stage ? { stageId: stage.id, stagePosition: 0 } : {}),
       pipelineRemovedAt: null,
       removalReason: null,
     },
   });
 
-  await db.call.update({ where: { id: callId }, data: { disposition: 'callback' } });
+  /**
+   * The stage records where the lead went; the outcome records what happened.
+   *
+   * Filing a voicemail as "Callback" loses the only fact that matters when the
+   * operator comes back to it — that nobody picked up and there is a greeting
+   * to work from, rather than a conversation that ended in "call me next week".
+   * They read very differently on a callback list.
+   */
+  await db.call.update({
+    where: { id: callId },
+    data: { disposition: 'voicemail' },
+  });
 
   await db.activity.create({
     data: {

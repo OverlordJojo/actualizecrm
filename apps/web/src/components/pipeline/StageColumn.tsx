@@ -23,6 +23,7 @@ export function StageColumn({
   color,
   leads,
   onCallLeadId,
+  ringingLeadIds,
   aiSuggested,
   caption,
   onOpenLead,
@@ -42,6 +43,7 @@ export function StageColumn({
   color: string;
   leads: BoardLead[];
   onCallLeadId?: string | null;
+  ringingLeadIds?: string[];
   /// The AI is proposing the lead on the call belongs here (§5.6). Drawn as a
   /// pulsing outline rather than moving anything — the operator decides, and
   /// their choice locks further suggestions out for the call.
@@ -238,6 +240,9 @@ export function StageColumn({
             key={lead.id}
             lead={lead}
             isOnCall={lead.id === onCallLeadId}
+            isRinging={
+              lead.id !== onCallLeadId && (ringingLeadIds?.includes(lead.id) ?? false)
+            }
             onOpen={onOpenLead}
             selectable={selectable}
             selected={selectedIds?.has(lead.id)}

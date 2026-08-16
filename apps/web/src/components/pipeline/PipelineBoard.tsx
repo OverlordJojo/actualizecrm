@@ -19,12 +19,18 @@ import { ContactSlideOver } from '@/components/contact/ContactSlideOver';
 export function PipelineBoard({
   initial,
   onCallLeadId,
+  ringingLeadIds,
   aiSuggestedStageId,
   onManualStageChoice,
   onTrashed,
 }: {
   initial: BoardData;
+  /// The lead actually on the line. Once one connects it is the only one lit.
   onCallLeadId?: string | null;
+  /// Every lead currently ringing in the open burst. Lit more faintly, so the
+  /// operator can see who is being tried without mistaking any of them for the
+  /// one they are talking to (§3.7).
+  ringingLeadIds?: string[];
   /// Column the AI wants the lead on the call moved to (§5.6).
   aiSuggestedStageId?: string | null;
   /// Called when the operator moves a lead themselves, which permanently ends
@@ -347,6 +353,7 @@ export function PipelineBoard({
               color={stage.color}
               leads={stage.leads}
               onCallLeadId={onCallLeadId}
+              ringingLeadIds={ringingLeadIds}
               aiSuggested={aiSuggestedStageId === stage.id}
               showDealValue={showDealValue}
               // The first column is the dial queue, and its order is the order

@@ -11,6 +11,7 @@ import { leadDisplayName, type BoardLead } from './types';
 export function LeadCard({
   lead,
   isOnCall,
+  isRinging,
   overlay,
   onOpen,
   selectable,
@@ -21,6 +22,10 @@ export function LeadCard({
   /// The lead currently on the phone keeps a persistent outline so it stays
   /// findable on a crowded board while the operator is talking.
   isOnCall?: boolean;
+  /// Ringing in the open burst but not yet connected. Drawn more faintly and
+  /// pulsing, so all three are visible at once and the one that answers is
+  /// unmistakably different from the two that have not (§3.7).
+  isRinging?: boolean;
   /// Rendered inside the drag overlay rather than in a column.
   overlay?: boolean;
   /// Opens the full detail view (§3.6).
@@ -84,8 +89,10 @@ export function LeadCard({
       className={cn(
         'group relative cursor-grab select-none rounded-lg border bg-ink-900 px-2.5 py-2 active:cursor-grabbing',
         isOnCall
-          ? 'border-brand-500 ring-1 ring-brand-500'
-          : 'border-ink-800 hover:border-ink-700',
+          ? 'border-brand-500 ring-2 ring-brand-500'
+          : isRinging
+            ? 'animate-pulse border-brand-700/70 ring-1 ring-brand-700/40'
+            : 'border-ink-800 hover:border-ink-700',
         // The original stays in place but dimmed while the overlay follows the
         // cursor, so the operator can see where it came from.
         isDragging && !overlay && 'opacity-30',

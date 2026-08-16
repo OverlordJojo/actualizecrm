@@ -303,6 +303,9 @@ export function DialerClient({
           key={boardKey}
           initial={board}
           onCallLeadId={call.activeLead?.id ?? null}
+          // While a burst rings, every leg is lit; the instant one connects it
+          // is the only one left highlighted.
+          ringingLeadIds={call.ringingLeads.map((l) => l.id)}
           aiSuggestedStageId={call.suggestedStageId}
           onManualStageChoice={call.lockStageChoice}
           onTrashed={(info) =>
